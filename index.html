@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Голосовая комната</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.2/dist/livekit-client.umd.min.js"></script>
+<style>
+  :root { --bg:#101014; --fg:#e8e8ec; --mut:#8b8b96; --ok:#3ddc84; --bad:#ff5a5f; --card:#1b1b21; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; padding:16px 14px 90px; background:var(--bg); color:var(--fg);
+         font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  h1 { font-size:17px; margin:0 0 2px; }
+  .sub { color:var(--mut); font-size:13px; margin:0 0 14px; }
+  .card { background:var(--card); border-radius:12px; padding:10px 12px; margin:10px 0; }
+  .p { display:flex; align-items:center; gap:10px; padding:8px 0; }
+  .dot { width:9px; height:9px; border-radius:50%; background:#3a3a44; flex:0 0 auto; }
+  .dot.on { background:var(--ok); box-shadow:0 0 0 4px rgba(61,220,132,.18); }
+  .nm { flex:1; font-size:14px; }
+  .me { color:var(--mut); font-size:12px; }
+  #bar { position:fixed; left:0; right:0; bottom:0; padding:12px 14px calc(12px + env(safe-area-inset-bottom));
+         background:#16161c; display:flex; gap:10px; }
+  button { flex:1; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px;
+           background:#3a7afe; color:#fff; }
+  button.off { background:#3a3a44; }
+  button.leave { background:#4a2226; color:#ff9aa0; flex:0 0 40%; }
+  button:active { opacity:.85; }
+  #state { font-size:13px; color:var(--mut); margin:8px 0 0; }
+  .err { color:var(--bad); }
+</style>
+</head>
+<body>
+<h1 id="title">Голосовая комната</h1>
+<p class="sub" id="sub">Подключаюсь…</p>
+<div class="card" id="people"></div>
+<p id="state"></p>
+
+<div id="bar">
+  <button id="mic">🎙 Выключить микрофон</button>
+  <button id="out" class="leave">Выйти</button>
+</div>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var tg = (window.Telegram || {}).WebApp;
+  if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+
+  var VERSION = 'a126aeda8436';
+  var q = new URLSearchParams(location.search);
+  // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
+  // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
+  // каждую, а вшитый адрес - что страница, выложенная до появления Worker'а, остаётся
+  // немой до следующего деплоя (этот класс мы уже ловили у плеера).
+  var API = (q.get('api') || 'https://hara-search.laynenorstrud.workers.dev').replace(/\/+$/, '');
+  var ROOM = (q.get('room') || '').toLowerCase();
+
+  function say(t, bad) {
+    var el = $('state');
+    el.textContent = t || '';
+    el.className = bad ? 'err' : '';
+  }
+  function sub(t) { $('sub').textContent = t; }
+
+  if (!ROOM) { sub('Комната не указана'); say('В ссылке нет параметра room.', true); return; }
+  $('title').textContent = 'Комната: ' + ROOM;
+
+  if (!window.LivekitClient) {
+    sub('Не загрузился клиент');
+    say('Библиотека комнаты не доехала - проверь сеть и открой заново.', true);
+    return;
+  }
+  var LK = window.LivekitClient;
+
+  // ПРИЧИНЫ ОТКАЗА РАЗДЕЛЕНЫ. «Нет адреса», «Telegram не передал подпись» и «сервер не
+  // ответил» лечатся по-разному, и одна фраза на три случая час вела бы разбор не туда
+  // (живой урок плеера).
+  if (!API || API.indexOf('{{') === 0) {
+    sub('Нет адреса сервера');
+    say('Страница выложена без адреса эндпоинта. Это у нас: сперва worker_deploy.deploy().',
+        true);
+    return;
+  }
+  var initData = (tg && tg.initData) || '';
+  if (!initData) {
+    sub('Нет подписи Telegram');
+    say('Открой комнату кнопкой из бота: без подписи сервер не знает, кто ты.', true);
+    return;
+  }
+
+  var room = null, people = {}, micOn = true;
+
+  function draw() {
+    var box = $('people');
+    box.innerHTML = '';
+    var ids = Object.keys(people);
+    if (!ids.length) { box.innerHTML = '<div class="me">Пока никого</div>'; return; }
+    ids.forEach(function (id) {
+      var p = people[id];
+      var row = document.createElement('div');
+      row.className = 'p';
+      row.innerHTML = '<span class="dot' + (p.speaking ? ' on' : '') + '"></span>'
+        + '<span class="nm"></span>'
+        + '<span class="me">' + (p.me ? 'ты' : (p.muted ? 'микрофон выкл' : '')) + '</span>';
+      row.querySelector('.nm').textContent = p.name;
+      box.appendChild(row);
+    });
+  }
+
+  function upsert(id, patch) {
+    people[id] = Object.assign(people[id] || { name: id, speaking: false, muted: false }, patch);
+    draw();
+  }
+
+  async function go() {
+    var r;
+    try {
+      r = await fetch(API + '/rtc/token?room=' + encodeURIComponent(ROOM), {
+        headers: { 'X-Init-Data': initData },
+      });
+    } catch (e) {
+      sub('Сервер не ответил');
+      say('Не достучался до ' + API + ': ' + (e && e.message || e), true);
+      return;
+    }
+    var j = null;
+    try { j = await r.json(); } catch (e) { j = null; }
+    if (!r.ok || !j || !j.token) {
+      sub('Войти не вышло');
+      // ОТКАЗ НАЗЫВАЕТ ПРИЧИНУ СЕРВЕРА, А НЕ «ошибка». Код без текста это чёрный ящик.
+      say('Сервер отказал (' + r.status + '): ' + ((j && (j.why || j.error)) || 'без причины'),
+          true);
+      return;
+    }
+
+    room = new LK.Room({
+      adaptiveStream: false,      // видео нет вовсе - адаптировать нечего
+      dynacast: true,             // не гоняем дорожки туда, где их никто не слушает
+      // ═══ ТРИ ФЛАГА ОБРАБОТКИ ЗВУКА - ОБЯЗАТЕЛЬНЫ ═══
+      // Без echoCancellation комната с двух телефонов в одной комнате даёт вой; без
+      // noiseSuppression в эфир едет кондиционер; без autoGainControl один участник
+      // слышен шёпотом, другой криком. Это не «настройки по вкусу», а условие того,
+      // чтобы разговором вообще можно было пользоваться.
+      audioCaptureDefaults: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    room.on(LK.RoomEvent.ParticipantConnected, function (p) {
+      upsert(p.identity, { name: p.name || p.identity });
+    });
+    room.on(LK.RoomEvent.ParticipantDisconnected, function (p) {
+      delete people[p.identity]; draw();
+    });
+    room.on(LK.RoomEvent.TrackSubscribed, function (track) {
+      if (track.kind === 'audio') {
+        // ЗВУК ИГРАЕТ ЭЛЕМЕНТОМ, КОТОРЫЙ МЫ ДЕРЖИМ САМИ: на iOS элемент, не привязанный к
+        // DOM, браузер вправе выгрузить, и участник замолкает без единой ошибки.
+        var el = track.attach();
+        el.setAttribute('playsinline', '');
+        el.style.display = 'none';
+        document.body.appendChild(el);
+      }
+    });
+    room.on(LK.RoomEvent.ActiveSpeakersChanged, function (spk) {
+      var now = {};
+      spk.forEach(function (p) { now[p.identity] = true; });
+      Object.keys(people).forEach(function (id) { people[id].speaking = !!now[id]; });
+      draw();
+    });
+    room.on(LK.RoomEvent.TrackMuted, function (_pub, p) { upsert(p.identity, { muted: true }); });
+    room.on(LK.RoomEvent.TrackUnmuted, function (_pub, p) { upsert(p.identity, { muted: false }); });
+    room.on(LK.RoomEvent.Disconnected, function (reason) {
+      sub('Отключился');
+      say('Соединение закрыто' + (reason ? ' (' + reason + ')' : '') + '.');
+    });
+    // ПЕРЕПОДКЛЮЧЕНИЕ НАЗЫВАЕТСЯ ВСЛУХ: молчащая комната и комната, которая сейчас
+    // вернётся, для человека выглядят одинаково, а ждать стоит только во второй.
+    room.on(LK.RoomEvent.Reconnecting, function () { say('Связь прервалась, возвращаюсь…'); });
+    room.on(LK.RoomEvent.Reconnected, function () { say(''); });
+
+    try {
+      await room.connect(j.url, j.token);
+      await room.localParticipant.setMicrophoneEnabled(true);
+    } catch (e) {
+      sub('Не подключился');
+      say('LiveKit: ' + (e && e.message || e), true);
+      return;
+    }
+    upsert(room.localParticipant.identity, { name: 'Ты', me: true });
+    room.remoteParticipants.forEach(function (p) {
+      upsert(p.identity, { name: p.name || p.identity });
+    });
+    sub('В комнате');
+    say('');
+  }
+
+  $('mic').onclick = async function () {
+    if (!room) return;
+    micOn = !micOn;
+    try { await room.localParticipant.setMicrophoneEnabled(micOn); } catch (e) {}
+    $('mic').textContent = micOn ? '🎙 Выключить микрофон' : '🔇 Включить микрофон';
+    $('mic').className = micOn ? '' : 'off';
+    upsert(room.localParticipant.identity, { muted: !micOn });
+  };
+  $('out').onclick = async function () {
+    try { if (room) await room.disconnect(); } catch (e) {}
+    // ЗАКРЫВАЕМ АППКУ САМИ: человек, нажавший «Выйти», ждёт возврата в чат, а не пустого
+    // экрана с надписью «отключился».
+    try { if (tg && tg.close) tg.close(); } catch (e) {}
+  };
+
+  // САМООБНОВЛЕНИЕ - ТОТ ЖЕ МЕХАНИЗМ, ЧТО У ПЛЕЕРА И ПРОБЫ МИКРОФОНА: вебвью держит
+  // страницу в кэше сутками, и правка комнаты доехала бы до людей через день.
+  (function () {
+    if (VERSION.indexOf('{{') === 0) return;
+    var KEY = 'hara_room_reloaded';
+    fetch('version.txt?t=' + VERSION, { cache: 'no-store' }).then(function (r) {
+      return r.ok ? r.text() : null;
+    }).then(function (v) {
+      if (!v) return;
+      v = v.trim();
+      if (!v || v === VERSION) { try { sessionStorage.removeItem(KEY); } catch (e) {} return; }
+      var once = null;
+      try { once = sessionStorage.getItem(KEY); } catch (e) {}
+      if (once === v) return;
+      try { sessionStorage.setItem(KEY, v); } catch (e) {}
+      var _q = null;
+      try { _q = new URLSearchParams(location.search); } catch (e) { _q = null; }
+      if (_q) { _q.set('v', v); }
+      location.replace(location.pathname + '?' +
+        (_q ? _q.toString() : 'v=' + encodeURIComponent(v)) + location.hash);
+    }).catch(function () {});
+  })();
+
+  go();
+})();
+</script>
+</body>
+</html>
