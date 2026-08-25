@@ -54,6 +54,7 @@
   <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
   <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
   <button id="rec" class="wide" style="display:none">⏺ Записать созвон</button>
+  <button id="dj" class="wide" style="display:none">📻 Включить радио</button>
   <p class="me" id="showhint"></p>
   <p class="me" id="audiodbg"></p>
 </div>
@@ -69,7 +70,14 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'bad5838667fa';
+  var VERSION = '0d200be1064f';
+  // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
+  // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
+  // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
+  // старая страница физически не может работать с новым Worker'ом, и тогда предлагать ей
+  // «обновись» бессмысленно - надо честно сказать, что она мертва. Число обязано
+  // совпадать с RTC_CONTRACT в worker/search.js.
+  var PAGE_CONTRACT = 1;
   var q = new URLSearchParams(location.search);
   // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
   // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
@@ -117,7 +125,28 @@
     return;
   }
 
-  var room = null, people = {}, micOn = true, recOn = false;
+  // ═══ ФЛАГИ ОБРАБОТКИ ЗВУКА ═══
+  // Без echoCancellation комната с двух телефонов рядом даёт вой; без noiseSuppression в
+  // эфир едет кондиционер; без autoGainControl один слышен шёпотом, другой криком. Это не
+  // «настройки по вкусу», а условие того, чтобы разговором вообще можно было пользоваться.
+  //
+  // ═══ voiceIsolation МЫ САМИ ЖЕ И ПОТЕРЯЛИ, И ЭТО НАЙДЕНО ПО ИСХОДНИКУ SDK ═══
+  // У livekit-client свои умолчания захвата (`audioDefaults` в defaults.ts тега 2.7.2):
+  // autoGainControl, echoCancellation, noiseSuppression И voiceIsolation - все true.
+  // `audioCaptureDefaults` в опциях комнаты ЗАМЕНЯЕТ этот объект ЦЕЛИКОМ, а не мержится
+  // по полям, - то есть, выписав «свои три флага», мы молча выкинули четвёртый. А он тут
+  // самый уместный: voiceIsolation это отдельная ML-модель под голос, и РОВНЫЙ ГУЛ (живой
+  // случай Ren) - ровно её работа. Классический наш класс: «явно задали» оказалось УЖЕ,
+  // чем «не трогали».
+  // ФЛАГ, КОТОРОГО БРАУЗЕР НЕ ЗНАЕТ, БЕЗОПАСЕН: неизвестные имена в getUserMedia
+  // отбрасываются, а не роняют захват. Поэтому его отсутствие в отчёте - НЕ повод кричать.
+  var AUDIO_WANT = { echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+                     voiceIsolation: true };
+  //: Что обязано быть у ЛЮБОГО браузера. По этим трём судим строго; voiceIsolation -
+  //: только показываем, если он о нём вообще сообщает.
+  var AUDIO_MUST = ['noiseSuppression', 'echoCancellation', 'autoGainControl'];
+
+  var room = null, people = {}, micOn = true, recOn = false, djOn = false;
 
   // СОСТОЯНИЕ ЗАПИСИ ЧИТАЕТСЯ У КОМНАТЫ, А НЕ ХРАНИТСЯ У НАС. Свой флажок разошёлся бы с
   // сервером на первом же падении Egress, и кнопка предлагала бы остановить то, что уже
@@ -142,6 +171,15 @@
     if (btn.style.display !== 'none') {
       btn.classList.toggle('on', recOn);
       btn.textContent = recOn ? '⏹ Остановить запись' : '⏺ Записать созвон';
+    }
+    // РАДИО ЖИВЁТ В ТЕХ ЖЕ МЕТАДАННЫХ, И ЭТО НЕ ЭКОНОМИЯ ПОЛЯ. Признак «что играет»
+    // обязан доезжать до вошедшего ПОЗЖЕ ровно так же, как признак записи: рассылка по
+    // каналу данных молчала бы именно ему.
+    djOn = !!(m && m.dj);
+    var d = $('dj');
+    if (d.style.display !== 'none') {
+      d.classList.toggle('on', djOn);
+      d.textContent = djOn ? ('⏹ Выключить радио (' + m.dj + ')') : '📻 Включить радио';
     }
   }
 
@@ -250,11 +288,10 @@
       // noiseSuppression в эфир едет кондиционер; без autoGainControl один участник
       // слышен шёпотом, другой криком. Это не «настройки по вкусу», а условие того,
       // чтобы разговором вообще можно было пользоваться.
-      audioCaptureDefaults: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
+      // ОДИН ОБЪЕКТ НА ВСЕ ТРИ МЕСТА (умолчания комнаты, явная просьба при включении
+      // микрофона, починка после захвата). Три копии этих флагов разъехались бы, и
+      // разбор «что мы вообще просили» упёрся бы в вопрос «которая из копий».
+      audioCaptureDefaults: AUDIO_WANT,
     });
 
     room.on(LK.RoomEvent.ParticipantConnected, function (p) {
@@ -317,7 +354,10 @@
 
     try {
       await room.connect(j.url, j.token);
-      await room.localParticipant.setMicrophoneEnabled(true);
+      // ФЛАГИ ПЕРЕДАЮТСЯ ЯВНО, А НЕ ТОЛЬКО ЧЕРЕЗ УМОЛЧАНИЯ КОМНАТЫ. Умолчания SDK
+      // мержит со своими, и «мы же попросили в конструкторе» - это рассуждение, а не
+      // гарантия: у аргумента приоритет выше, и он снимает вопрос целиком.
+      await room.localParticipant.setMicrophoneEnabled(true, AUDIO_WANT);
     } catch (e) {
       sub('Не подключился');
       say('LiveKit: ' + (e && e.message || e), true);
@@ -337,28 +377,74 @@
     // значит вопрос не «слабое ли оно», а «включилось ли вообще».
     // getSettings() отдаёт ПРИМЕНЁННЫЕ значения, и печатаем мы их НА СТРАНИЦЕ, а не в
     // консоль: до консоли на телефоне не добраться.
-    function audioFacts() {
-      try {
-        var pubs = room.localParticipant.trackPublications
-                || room.localParticipant.tracks || new Map();
-        var out = null;
-        pubs.forEach(function (pub) {
-          if (String(pub.source || '') !== 'microphone' || !pub.track) return;
-          var ms = pub.track.mediaStreamTrack;
-          if (ms && ms.getSettings) out = ms.getSettings();
-        });
-        if (!out) { $('audiodbg').textContent = 'микрофон ещё не опубликован'; return; }
-        var f = function (k) {
-          // ОТСУТСТВИЕ ПОЛЯ И false - РАЗНЫЕ ОТВЕТЫ. «Не сказали» значит браузер не
-          // сообщает о поддержке, а не «выключено», и лечится это по-разному.
-          return (k in out) ? (out[k] ? 'вкл' : 'ВЫКЛ') : 'не сообщает';
-        };
-        $('audiodbg').textContent = 'звук: шумодав ' + f('noiseSuppression')
-          + ' · эхо ' + f('echoCancellation') + ' · громкость ' + f('autoGainControl')
-          + ' · ' + (out.sampleRate || '?') + ' Гц'
-          + (out.deviceId ? '' : '');
-      } catch (e) { $('audiodbg').textContent = 'настройки звука не спросить: ' + e; }
+    function micTrack() {
+      var pubs = room.localParticipant.trackPublications
+              || room.localParticipant.tracks || new Map();
+      var out = null;
+      pubs.forEach(function (pub) {
+        if (String(pub.source || '') !== 'microphone' || !pub.track) return;
+        out = pub.track.mediaStreamTrack || null;
+      });
+      return out;
     }
+
+    function flagLine(o) {
+      var f = function (k) {
+        // ОТСУТСТВИЕ ПОЛЯ И false - РАЗНЫЕ ОТВЕТЫ. «Не сказали» значит браузер не
+        // сообщает о поддержке, а не «выключено», и лечится это по-разному.
+        return (k in o) ? (o[k] ? 'вкл' : 'ВЫКЛ') : 'не сообщает';
+      };
+      return 'шумодав ' + f('noiseSuppression') + ' · эхо ' + f('echoCancellation')
+        + ' · громкость ' + f('autoGainControl')
+        + (('voiceIsolation' in o) ? (' · голос ' + f('voiceIsolation')) : '');
+    }
+
+    async function audioFacts() {
+      var box = $('audiodbg');
+      try {
+        var ms = micTrack();
+        if (!ms) { box.textContent = 'микрофон ещё не опубликован'; return; }
+
+        // ═══ ЧТО МЫ ПОПРОСИЛИ У БРАУЗЕРА НА САМОМ ДЕЛЕ ═══
+        // Это ОТВЕТ НА ВОПРОС «не перекрыл ли LiveKit наши флаги»: getConstraints()
+        // отдаёт то, с чем дорожка реально захвачена, а AUDIO_WANT - то, что мы просили.
+        // Расходятся - значит между нами и браузером кто-то вмешался, и это видно ЗДЕСЬ,
+        // а не выводится рассуждением о том, как SDK мержит умолчания.
+        var asked = {};
+        try { asked = (ms.getConstraints && ms.getConstraints()) || {}; } catch (e) {}
+        var over = [];
+        AUDIO_MUST.forEach(function (k) {
+          if (!(k in asked)) { over.push(k + ': не дошло'); return; }
+          var v = (asked[k] && typeof asked[k] === 'object') ? asked[k].ideal : asked[k];
+          if (v !== AUDIO_WANT[k]) over.push(k + ': просили ' + AUDIO_WANT[k] + ', ушло ' + v);
+        });
+
+        var got = (ms.getSettings && ms.getSettings()) || {};
+        // ═══ ПРИМЕНИЛОСЬ НЕ ТО - ЧИНИМ, А НЕ КОНСТАТИРУЕМ ═══
+        // Живой случай (Ren): ровный гул, с которым встроенное подавление обязано
+        // справляться. Значит вопрос был не «слабое ли оно», а «включилось ли вообще»;
+        // если браузер сказал ВЫКЛ, у нас есть ровно один законный ход - попросить ещё
+        // раз через applyConstraints и СКАЗАТЬ, помогло ли.
+        var bad = AUDIO_MUST.filter(function (k) { return (k in got) && !got[k]; });
+        var fixed = '';
+        if (bad.length && ms.applyConstraints) {
+          try {
+            await ms.applyConstraints(AUDIO_WANT);
+            got = (ms.getSettings && ms.getSettings()) || got;
+            var still = bad.filter(function (k) { return (k in got) && !got[k]; });
+            fixed = still.length ? (' · чинил, НЕ ПОМОГЛО: ' + still.join(', '))
+                                 : ' · было выключено, включил на ходу';
+          } catch (e) {
+            fixed = ' · починить не дал: ' + (e && e.name || e);
+          }
+        }
+
+        box.textContent = 'звук: ' + flagLine(got)
+          + ' · ' + (got.sampleRate || '?') + ' Гц' + fixed
+          + (over.length ? ' · ⚠️ до браузера дошло не то (' + over.join('; ') + ')' : '');
+      } catch (e) { box.textContent = 'настройки звука не спросить: ' + e; }
+    }
+
     setTimeout(audioFacts, 800);
 
     // ═══ ПОКАЗ ЭКРАНА: КНОПКА ПО НАЛИЧИЮ МЕТОДА, А НЕ ПО ПЛАТФОРМЕ ═══
@@ -515,30 +601,61 @@
       recBtn.onclick = async function () {
         recBtn.disabled = true;
         say(recOn ? 'Останавливаю запись…' : 'Прошу бота начать запись…');
-        try {
-          var r = await fetch(API + '/signal', {
-            method: 'POST',
-            headers: { 'X-Init-Data': initData, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ kind: 'rtcrec', room: ROOM }),
-          });
-          var j = await r.json();
-          if (!r.ok || !j || !j.id) {
-            // ДВА РАЗНЫХ МИРА ПОД ОДНИМ КОДОМ 400. `bad_kind` означает, что Worker
-            // выложен СТАРОЙ версией и про запись не знает вовсе, - это у нас, лечится
-            // деплоем, и человеку незачем гадать. Тот же класс, что уже дважды стоил
-            // круга: страница и Worker выкладываются разными командами.
-            var why = (j && (j.why || j.error)) || 'без причины';
-            say(why === 'bad_kind'
-                ? 'Запись не подключена: Worker выложен старой версией и про неё не знает. '
-                  + 'Это у нас - worker_deploy.deploy().'
-                : 'Бот не принял просьбу (' + r.status + '): ' + why, true);
-          } else {
-            await waitRec(j.id);
-          }
-        } catch (e) {
-          say('Не достучался до бота: ' + (e && e.message || e), true);
-        }
+        await ask({ kind: 'rtcrec', room: ROOM });
         recBtn.disabled = false;
+      };
+    }
+
+    // ОДНА ДВЕРЬ «ПОЛОЖИТЬ СИГНАЛ И ДОЖДАТЬСЯ ОТВЕТА» НА ВСЕ КНОПКИ КОМНАТЫ. Две копии
+    // этого круга разошлись бы на первой правке - например, одна научилась бы объяснять
+    // `bad_kind`, а вторая продолжала бы показывать человеку машинный код (закон №40).
+    async function ask(body) {
+      try {
+        var r = await fetch(API + '/signal', {
+          method: 'POST',
+          headers: { 'X-Init-Data': initData, 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        var j = await r.json();
+        if (!r.ok || !j || !j.id) {
+          // ДВА РАЗНЫХ МИРА ПОД ОДНИМ КОДОМ 400. `bad_kind` означает, что Worker выложен
+          // СТАРОЙ версией и про эту кнопку не знает вовсе, - это у нас, лечится деплоем,
+          // и человеку незачем гадать. Тот же класс, что уже дважды стоил круга: страница
+          // и Worker выкладываются разными командами.
+          var why = (j && (j.why || j.error)) || 'без причины';
+          say(why === 'bad_kind'
+              ? 'Эта кнопка не подключена: Worker выложен старой версией и про неё не '
+                + 'знает. Это у нас - worker_deploy.deploy().'
+              : 'Бот не принял просьбу (' + r.status + '): ' + why, true);
+          return false;
+        }
+        await waitRec(j.id);
+        return true;
+      } catch (e) {
+        say('Не достучался до бота: ' + (e && e.message || e), true);
+        return false;
+      }
+    }
+
+    // ═══ РАДИО В КОМНАТУ: ТОТ ЖЕ ЯЩИК, ЧТО У ЗАПИСИ ═══
+    // СТАНЦИЮ ИЩЕТ БОТ, А НЕ МЫ. Отсюда уезжает самое большее НАЗВАНИЕ; адрес потока
+    // резолвится на нашей стороне тем же каталогом, что питает Медиаплеер. Пусти мы
+    // адрес из аппки - белый список источников (что вообще можно публиковать в комнату)
+    // обходился бы одной строкой в консоли.
+    if (initData) {
+      var djBtn = $('dj');
+      djBtn.style.display = '';
+      showRec();
+      djBtn.onclick = async function () {
+        var nm = '';
+        if (!djOn) {
+          try { nm = (prompt('Какую станцию? (пусто - на мой вкус)') || '').slice(0, 60); }
+          catch (e) { nm = ''; }
+        }
+        djBtn.disabled = true;
+        say(djOn ? 'Выключаю радио…' : 'Ищу станцию…');
+        await ask({ kind: 'rtcdj', room: ROOM, nm: nm });
+        djBtn.disabled = false;
       };
     }
 
@@ -601,30 +718,86 @@
     try { if (tg && tg.close) tg.close(); } catch (e) {}
   };
 
-  // САМООБНОВЛЕНИЕ - ТОТ ЖЕ МЕХАНИЗМ, ЧТО У ПЛЕЕРА И ПРОБЫ МИКРОФОНА: вебвью держит
-  // страницу в кэше сутками, и правка комнаты доехала бы до людей через день.
-  (function () {
-    if (VERSION.indexOf('{{') === 0) return;
-    var KEY = 'hara_room_reloaded';
-    fetch('version.txt?t=' + VERSION, { cache: 'no-store' }).then(function (r) {
-      return r.ok ? r.text() : null;
-    }).then(function (v) {
-      if (!v) return;
-      v = v.trim();
-      if (!v || v === VERSION) { try { sessionStorage.removeItem(KEY); } catch (e) {} return; }
-      var once = null;
-      try { once = sessionStorage.getItem(KEY); } catch (e) {}
-      if (once === v) return;
-      try { sessionStorage.setItem(KEY, v); } catch (e) {}
-      var _q = null;
-      try { _q = new URLSearchParams(location.search); } catch (e) { _q = null; }
-      if (_q) { _q.set('v', v); }
-      location.replace(location.pathname + '?' +
-        (_q ? _q.toString() : 'v=' + encodeURIComponent(v)) + location.hash);
-    }).catch(function () {});
-  })();
+  // ═══ ОБНОВЛЕНИЯ: СПРАШИВАЕМ WORKER'А, А НЕ ФАЙЛ РЯДОМ СО СТРАНИЦЕЙ ═══
+  // ЗАЧЕМ ПЕРЕДЕЛАНО. Прежняя редакция читала `version.txt`, лежащий В ТОМ ЖЕ каталоге,
+  // что и страница. Он попадает в ТОТ ЖЕ кэш вебвью и отвечает так же устарело - то есть
+  // старая страница спрашивала у старого файла, свежа ли она, и получала «да».
+  // Мы трое выгружали Telegram руками после каждой выкладки; человек, который не
+  // закрывает приложение неделями, живёт со страницей двухнедельной давности и жалуется
+  // на баги, которые мы давно починили. Worker - живой API на ДРУГОМ хосте, его ответ
+  // вебвью не кэширует, и знает он ровно то, что мы ему сказали при деплое.
+  //
+  // ПРОВЕРКА ПРИ КАЖДОМ ОТКРЫТИИ, А НЕ РАЗ В СУТКИ: комнату открывают редко, и «раз в
+  // сутки» на таком ритме означает «почти никогда».
+  //
+  // ТРИ ИСХОДА, И ОНИ РАЗНЫЕ ПО ДЕЙСТВИЮ:
+  //   свежая        - работаем молча;
+  //   есть новее    - ГОВОРИМ об этом и перезагружаемся с пробитием кэша. Молча моргнуть
+  //                   страницей нельзя: человек не поймёт, что произошло;
+  //   несовместимая - НЕ РАБОТАЕМ ВОВСЕ и говорим, что делать. Попытка «всё равно
+  //                   попробовать» даёт отказы, выглядящие как поломка комнаты, - а это
+  //                   ровно та подмена причины, из-за которой мы уже теряли круги.
+  var RELOAD_KEY = 'hara_room_reloaded';
 
-  go();
+  function verdictVersion(j) {
+    // ЧИСТАЯ ФУНКЦИЯ РЕШЕНИЯ: её и проверяет браузерная проба. Логика, размазанная по
+    // колбэкам, проверяется только глазами, а глазами мы этот файл уже трижды читали
+    // неверно.
+    if (!j || j.error) return { act: 'skip' };          // Worker не знает - не мешаем
+    var mine = Number(PAGE_CONTRACT), min = Number(j.min_page || 0);
+    if (min && mine < min) return { act: 'dead' };
+    var ver = String(j.ver || '').trim();
+    if (!ver || VERSION.indexOf('{{') === 0 || ver === VERSION) return { act: 'ok' };
+    var once = null;
+    try { once = sessionStorage.getItem(RELOAD_KEY); } catch (e) {}
+    // УЖЕ ПЕРЕЗАГРУЖАЛИСЬ РАДИ ЭТОЙ ВЕРСИИ И ВСЁ РАВНО СТАРЫЕ - значит сами себя обновить
+    // НЕ МОЖЕМ (вебвью отдаёт свою копию). Второй круг перезагрузок ничего не изменит, а
+    // человек будет смотреть на мигающий экран.
+    if (once === ver) return { act: 'stuck', ver: ver };
+    return { act: 'reload', ver: ver };
+  }
+
+  async function checkVersion() {
+    var j = null;
+    try {
+      var r = await fetch(API + '/appver?app=room&t=' + encodeURIComponent(VERSION),
+                          { cache: 'no-store' });
+      j = await r.json();
+    } catch (e) { j = null; }
+    var v = verdictVersion(j);
+    if (v.act === 'ok' || v.act === 'skip') return true;
+    if (v.act === 'dead') {
+      sub('Версия устарела');
+      say('Эта страница старее, чем нужно серверу, и обновление её не вылечит. '
+          + 'Закрой окно и открой комнату заново из бота - кнопка там всегда свежая.', true);
+      return false;
+    }
+    if (v.act === 'stuck') {
+      sub('Не могу обновиться сам');
+      say('Есть свежая версия, но Telegram отдаёт мне свою старую копию. Закрой окно и '
+          + 'открой комнату заново из бота; если не поможет - выгрузи Telegram из памяти.',
+          true);
+      return false;
+    }
+    // ГОВОРИМ ДО ТОГО, КАК МОРГНЁМ. Перезагрузка без объяснения читается как сбой.
+    sub('Есть обновление');
+    say('Обновляю страницу до свежей версии…');
+    try { sessionStorage.setItem(RELOAD_KEY, v.ver); } catch (e) {}
+    var _q = null;
+    try { _q = new URLSearchParams(location.search); } catch (e) { _q = null; }
+    if (_q) { _q.set('v', v.ver); }
+    setTimeout(function () {
+      location.replace(location.pathname + '?'
+        + (_q ? _q.toString() : 'v=' + encodeURIComponent(v.ver)) + location.hash);
+    }, 700);
+    return false;
+  }
+
+  (async function () {
+    // ПРОВЕРКА ВЕРСИИ ИДЁТ ДО ПОДКЛЮЧЕНИЯ, А НЕ ПАРАЛЛЕЛЬНО С НИМ: несовместимая страница
+    // не должна успеть попросить токен - отказ приедет человеку раньше объяснения.
+    if (await checkVersion()) await go();
+  })();
 })();
 </script>
 </body>
