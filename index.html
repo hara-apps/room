@@ -44,6 +44,7 @@
 <div id="tools" class="card">
   <button id="hand" class="wide">✋ Поднять руку</button>
   <button id="show" class="wide" style="display:none"></button>
+  <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
   <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
   <p class="me" id="showhint"></p>
 </div>
@@ -59,7 +60,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '26cecd55757f';
+  var VERSION = 'ec194302840e';
   var q = new URLSearchParams(location.search);
   // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
   // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
@@ -295,62 +296,110 @@
     // Второе без первого бесполезно, первое без второго ВИСНЕТ вместо отказа.
     var g = grantOf(j.token), srcs = g.canPublishSources || [];
     var mayScreen = srcs.indexOf('screen_share') >= 0, mayCam = srcs.indexOf('camera') >= 0;
-    var canScreen = !!md.getDisplayMedia && mayScreen, canCam = !!md.getUserMedia && mayCam;
-    var showBtn = $('show'), sharing = null;
-    if (!mayScreen && !mayCam && !!md.getDisplayMedia) {
+    // ═══ ЭКРАН - ТОЛЬКО ГДЕ ЕСТЬ МЕТОД, КАМЕРА - ВЕЗДЕ ═══
+    // Прежняя редакция показывала камеру ТОЛЬКО там, где нет экрана, - как замену. Это
+    // неверно: с компьютера тоже надо показать себя, особенно когда экран показывать
+    // нечего. Делить по устройству оправдано лишь у экрана, где метода физически нет.
+    var canScreen = !!md.getDisplayMedia && mayScreen;
+    var canCam = !!md.getUserMedia && mayCam;
+    var showBtn = $('show'), camBtn = $('cam');
+
+    if (!mayScreen && !mayCam) {
       // ГЛАВНОЕ СООБЩЕНИЕ ЭТОГО ЭКРАНА: причина НЕ в браузере и не в комнате.
       $('showhint').textContent = 'Показ выключен на сервере: токен выдан без права '
-        + 'публикации экрана. Это у нас - Worker выложен старой версией, лечится '
+        + 'публикации. Это у нас - Worker выложен старой версией, лечится '
         + 'worker_deploy.deploy(). Смотреть чужой экран при этом можно.';
-    } else if (canScreen) {
-      showBtn.textContent = '🖥 Показать экран';
-      showBtn.style.display = '';
-      $('showhint').textContent = 'Смотреть чужой экран можно откуда угодно, показывать - с компьютера.';
-    } else if (canCam) {
-      // МОБИЛЬНЫМ ОСТАЁТСЯ КАМЕРА, И ЭТО НЕ ОТКАЗ, А ДРУГОЙ ПУТЬ. Третий путь называем
-      // словами: системная запись экрана и файл в комнату - не в реальном времени, зато
-      // с любого устройства.
-      showBtn.textContent = '📷 Показать камеру';
-      showBtn.style.display = '';
-      $('showhint').textContent = 'Показ экрана у телефонов недоступен - такой возможности нет '
-        + 'у мобильных браузеров. Запись экрана можно снять системой и прислать файлом в чат. '
-        + 'Смотреть чужой экран отсюда можно.';
     } else {
-      $('showhint').textContent = 'Показывать нечем: этот клиент не даёт ни экрана, ни камеры. '
-        + 'Смотреть чужой экран можно.';
+      if (canScreen) showBtn.style.display = '';
+      if (canCam) camBtn.style.display = '';
+      $('showhint').textContent = canScreen
+        ? 'Смотреть чужой экран можно откуда угодно, показывать - с компьютера.'
+        : 'Показ экрана у телефонов недоступен - такой возможности нет у мобильных '
+          + 'браузеров. Запись экрана можно снять системой и прислать файлом в чат. '
+          + 'Камера и просмотр чужого экрана работают отсюда.';
     }
-    showBtn.onclick = async function () {
-      if (sharing) {
-        try { await room.localParticipant.unpublishTrack(sharing); } catch (e) {}
-        sharing = null; showBtn.classList.remove('on');
-        showBtn.textContent = canScreen ? '🖥 Показать экран' : '📷 Показать камеру';
-        return;
-      }
+    showBtn.textContent = '🖥 Показать экран';
+
+    // ═══ ОДНА ДВЕРЬ НА ОБА ПОКАЗА, РАЗНЫЕ ТОЛЬКО ИСТОЧНИК И ПОДПИСЬ ═══
+    // Две копии «включить/выключить» разошлись бы на первой правке (закон №40), а тут
+    // цена расхождения - висящая дорожка, которую видно СОСЕДЯМ, а не нам.
+    function toggler(btn, kind, onLabel, offLabel) {
+      var live = false;
+      btn.onclick = async function () {
+        if (live) {
+          try {
+            // ВЫКЛЮЧАЕМ ТЕМ ЖЕ МЕТОДОМ, ЧТО ВКЛЮЧАЛИ. Прежняя редакция звала
+            // `unpublishTrack(sharing)`, где `sharing` было БУЛЕВЫМ - в SDK уезжало
+            // `true` вместо дорожки, и публикация не снималась ВООБЩЕ: у себя кнопка
+            // менялась, у соседей картинка оставалась (живой отказ Ren 25.08). Отсюда же
+            // рос второй симптом - старый поток не освобождался, и следующий выбор
+            // источника вёл себя непредсказуемо.
+            // ПОРЯДОК ЗДЕСЬ ЗНАЧИМ, И ЭТО ПОЙМАЛ БРАУЗЕРНЫЙ ПРОГОН. Сперва гасим САМИ
+            // дорожки (пока публикации ещё на месте), потом отключаем источник: наоборот
+            // `setScreenShareEnabled(false)` уже снял публикации, и явная остановка
+            // работала ВХОЛОСТУЮ - счётчик остановленных дорожек показывал ноль.
+            // Незакрытая дорожка держит захват, браузер считает источник занятым, и
+            // следующий выбор источника ведёт себя непредсказуемо (живой отказ Ren 25.08).
+            stopLocalMedia(kind);
+            if (kind === 'screen') await room.localParticipant.setScreenShareEnabled(false);
+            else await room.localParticipant.setCameraEnabled(false);
+          } catch (e) {
+            say('Не удалось остановить показ: ' + (e && e.message || e), true);
+            return;
+          }
+          live = false; btn.classList.remove('on'); btn.textContent = offLabel;
+          say('');
+          return;
+        }
+        try {
+          // ВИСЕТЬ НЕЛЬЗЯ: у LiveKit публикация без права уходит в бесконечное ожидание,
+          // и человек видит крутилку вместо причины.
+          var pub = (kind === 'screen')
+            // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
+            // живёт на общем канале песочницы. Читаемость текста даёт и 1080p.
+            ? room.localParticipant.setScreenShareEnabled(
+                true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
+            : room.localParticipant.setCameraEnabled(true);
+          await Promise.race([pub, new Promise(function (_, rej) {
+            setTimeout(function () {
+              rej(new Error('сервер не принял дорожку за 12 с. Чаще всего это старый токен '
+                            + 'без права показа: у нас не выложен Worker.'));
+            }, 12000);
+          })]);
+          live = true; btn.classList.add('on'); btn.textContent = onLabel;
+        } catch (e) {
+          // ПРИЧИНА НАЗЫВАЕТСЯ ВСЕГДА: отказ в разрешении и отсутствие метода лечатся
+          // по-разному, и «не получилось» отправило бы человека чинить не то.
+          stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
+          live = false; btn.classList.remove('on'); btn.textContent = offLabel;
+          say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
+              + (e && e.message || e), true);
+        }
+      };
+    }
+
+    // ЯВНАЯ ОСТАНОВКА ЛОКАЛЬНЫХ ДОРОЖЕК. Ищем среди своих публикаций те, что относятся к
+    // этому виду, и зовём stop() на КАЖДОЙ - у показа экрана их две (картинка и звук
+    // вкладки), и забытая вторая держит захват.
+    function stopLocalMedia(kind) {
       try {
-        // ВИСЕТЬ НЕЛЬЗЯ: у LiveKit публикация без права уходит в бесконечное ожидание,
-        // и человек видит крутилку вместо причины. Своя граница по времени превращает
-        // зависание в НАЗВАННЫЙ отказ.
-        var pub = canScreen
-          // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
-          // живёт на общем канале песочницы. Читаемость текста на экране даёт 1080p.
-          ? room.localParticipant.setScreenShareEnabled(
-              true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
-          : room.localParticipant.setCameraEnabled(true);
-        await Promise.race([pub, new Promise(function (_, rej) {
-          setTimeout(function () {
-            rej(new Error('сервер не принял дорожку за 12 с. Чаще всего это старый токен '
-                          + 'без права показа: у нас не выложен Worker.'));
-          }, 12000);
-        })]);
-        sharing = true; showBtn.classList.add('on');
-        showBtn.textContent = canScreen ? '⏹ Остановить показ' : '⏹ Выключить камеру';
-      } catch (e) {
-        // ПРИЧИНА НАЗЫВАЕТСЯ ВСЕГДА: отказ в разрешении и отсутствие метода лечатся
-        // по-разному, и «не получилось» отправило бы человека чинить не то.
-        say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
-            + (e && e.message || e), true);
-      }
-    };
+        var pubs = room.localParticipant.trackPublications
+                || room.localParticipant.tracks || new Map();
+        pubs.forEach(function (pub) {
+          var src = String(pub.source || '');
+          var mine = (kind === 'screen')
+            ? (src.indexOf('screen') >= 0)
+            : (src === 'camera');
+          if (!mine || !pub.track) return;
+          try { pub.track.stop(); } catch (e) {}
+          var ms = pub.track.mediaStreamTrack;
+          if (ms) { try { ms.stop(); } catch (e) {} }
+        });
+      } catch (e) {}
+    }
+
+    toggler(showBtn, 'screen', '⏹ Остановить показ', '🖥 Показать экран');
+    toggler(camBtn, 'camera', '⏹ Выключить камеру', '📷 Показать камеру');
 
     // ═══ РУКА И ОЧЕРЕДЬ СЛОВА - ПО КАНАЛУ ДАННЫХ LIVEKIT ═══
     // Он идёт по тому же соединению, что звук: это на порядок быстрее опроса нашего ящика
