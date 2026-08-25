@@ -27,6 +27,10 @@
   button.leave { background:#4a2226; color:#ff9aa0; flex:0 0 40%; }
   button:active { opacity:.85; }
   #state { font-size:13px; color:var(--mut); margin:8px 0 0; }
+  button.wide { width:100%; margin:6px 0; background:#25252e; font-weight:500; font-size:14px; }
+  button.wide.on { background:#3a7afe; }
+  #screens video { width:100%; border-radius:10px; margin:8px 0; background:#000; }
+  .hand { color:#ffd166; font-size:12px; }
   .err { color:var(--bad); }
 </style>
 </head>
@@ -34,7 +38,15 @@
 <h1 id="title">Голосовая комната</h1>
 <p class="sub" id="sub">Подключаюсь…</p>
 <div class="card" id="people"></div>
+<div id="screens"></div>
 <p id="state"></p>
+
+<div id="tools" class="card">
+  <button id="hand" class="wide">✋ Поднять руку</button>
+  <button id="show" class="wide" style="display:none"></button>
+  <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
+  <p class="me" id="showhint"></p>
+</div>
 
 <div id="bar">
   <button id="mic">🎙 Выключить микрофон</button>
@@ -47,7 +59,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'bb39eccf9488';
+  var VERSION = '96a0522ed17e';
   var q = new URLSearchParams(location.search);
   // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
   // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
@@ -83,10 +95,15 @@
         true);
     return;
   }
+  // ДВА СПОСОБА ВОЙТИ, И ОНИ РАЗНЫЕ ПО ТОМУ, ЧТО ДОКАЗЫВАЮТ. Подпись Telegram доказывает
+  // ЧЕЛОВЕКА; разовая ссылка доказывает только то, что её выдали мы. Второе слабее, и в
+  // комнате это помечено - участники должны понимать, кто с ними.
+  var WEB = q.get('web') || '';
   var initData = (tg && tg.initData) || '';
-  if (!initData) {
+  if (!initData && !WEB) {
     sub('Нет подписи Telegram');
-    say('Открой комнату кнопкой из бота: без подписи сервер не знает, кто ты.', true);
+    say('Открой комнату кнопкой из бота: без подписи сервер не знает, кто ты. '
+        + 'Либо попроси разовую ссылку - по ней можно войти и без Telegram.', true);
     return;
   }
 
@@ -115,8 +132,14 @@
       var p = people[id];
       var row = document.createElement('div');
       row.className = 'p';
+      // ОЧЕРЕДЬ СЛОВА - ЭТО ПОРЯДОК, А НЕ ФЛАЖОК: номер считается по времени поднятия,
+      // иначе «кто раньше поднял» решает случайный порядок объекта.
+      var q2 = ids.filter(function (x) { return people[x].hand; })
+                  .sort(function (a, b) { return people[a].hand - people[b].hand; });
+      var pos = q2.indexOf(id);
       row.innerHTML = '<span class="dot' + (p.speaking ? ' on' : '') + '"></span>'
         + '<span class="nm"></span>'
+        + (pos >= 0 ? '<span class="hand">✋ ' + (pos + 1) + '</span> ' : '')
         + '<span class="me">' + (p.me ? 'ты' : (p.muted ? 'микрофон выкл' : '')) + '</span>';
       row.querySelector('.nm').textContent = p.name;
       box.appendChild(row);
@@ -141,9 +164,18 @@
   async function go() {
     var r;
     try {
-      r = await fetch(API + '/rtc/token?room=' + encodeURIComponent(ROOM), {
-        headers: { 'X-Init-Data': initData },
-      });
+      if (WEB) {
+        // ИМЯ СПРАШИВАЕМ, ЕСЛИ ЕГО НЕТ В ССЫЛКЕ: человек без Telegram нам не представлен
+        // ничем, а соседям по комнате надо знать, кто говорит.
+        var nm = q.get('name') || '';
+        if (!nm) { try { nm = (prompt('Как тебя звать в комнате?') || '').slice(0, 40); } catch (e) {} }
+        r = await fetch(API + '/rtc/web?t=' + encodeURIComponent(WEB)
+                        + (nm ? '&name=' + encodeURIComponent(nm) : ''));
+      } else {
+        r = await fetch(API + '/rtc/token?room=' + encodeURIComponent(ROOM), {
+          headers: { 'X-Init-Data': initData },
+        });
+      }
     } catch (e) {
       sub('Сервер не ответил');
       say('Не достучался до ' + API + ': ' + (e && e.message || e), true);
@@ -160,7 +192,9 @@
     }
 
     room = new LK.Room({
-      adaptiveStream: false,      // видео нет вовсе - адаптировать нечего
+      // ВИДЕО ПОЯВИЛОСЬ (показ экрана и камера), значит адаптивный поток снова нужен:
+      // он не гонит крупную картинку туда, где её негде показать.
+      adaptiveStream: true,
       dynacast: true,             // не гоняем дорожки туда, где их никто не слушает
       // ═══ ТРИ ФЛАГА ОБРАБОТКИ ЗВУКА - ОБЯЗАТЕЛЬНЫ ═══
       // Без echoCancellation комната с двух телефонов в одной комнате даёт вой; без
@@ -180,7 +214,26 @@
     room.on(LK.RoomEvent.ParticipantDisconnected, function (p) {
       delete people[p.identity]; draw();
     });
-    room.on(LK.RoomEvent.TrackSubscribed, function (track) {
+    room.on(LK.RoomEvent.TrackUnsubscribed, function (track) {
+      if (track.kind !== 'video') return;
+      // ЧУЖОЕ ВИДЕО УБИРАЕТСЯ, КОГДА ЕГО ПЕРЕСТАЛИ ДАВАТЬ. Оставленный чёрный
+      // прямоугольник читается как «зависло».
+      var nodes = $('screens').querySelectorAll('video');
+      for (var i = 0; i < nodes.length; i++) {
+        if (nodes[i].dataset.sid === (track.sid || '')) nodes[i].remove();
+      }
+    });
+    room.on(LK.RoomEvent.TrackSubscribed, function (track, _pub, p) {
+      if (track.kind === 'video') {
+        // СМОТРЕТЬ ЧУЖОЙ ЭКРАН УМЕЮТ ВСЕ, ВКЛЮЧАЯ МОБИЛЬНЫЕ: это обычное входящее видео.
+        // Ограничение касается только ОТДАЧИ - там у мобильных браузеров нет самого API.
+        var v = track.attach();
+        v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
+        v.dataset.sid = track.sid || '';
+        $('screens').appendChild(v);
+        say((p && p.name ? p.name : 'Участник') + ' показывает экран.');
+        return;
+      }
       if (track.kind === 'audio') {
         // ЗВУК ИГРАЕТ ЭЛЕМЕНТОМ, КОТОРЫЙ МЫ ДЕРЖИМ САМИ: на iOS элемент, не привязанный к
         // DOM, браузер вправе выгрузить, и участник замолкает без единой ошибки.
@@ -217,6 +270,97 @@
       return;
     }
     connected = true;
+
+    // ═══ ПОКАЗ ЭКРАНА: КНОПКА ПО НАЛИЧИЮ МЕТОДА, А НЕ ПО ПЛАТФОРМЕ ═══
+    // Живая проба (Ren 24.08): desktop отдаёт поток 2880x1448@30 со звуком вкладки,
+    // Android - метода getDisplayMedia НЕТ ВООБЩЕ. Это не отказ в разрешении, а
+    // отсутствие API: подсказывать нечего, включать нечего.
+    // ПРОВЕРЯЕМ МЕТОД, А НЕ UserAgent: UA врёт (режим «для компьютеров» на телефоне),
+    // наличие метода - факт.
+    var md = navigator.mediaDevices || {};
+    var canScreen = !!md.getDisplayMedia, canCam = !!md.getUserMedia;
+    var showBtn = $('show'), sharing = null;
+    if (canScreen) {
+      showBtn.textContent = '🖥 Показать экран';
+      showBtn.style.display = '';
+      $('showhint').textContent = 'Смотреть чужой экран можно откуда угодно, показывать - с компьютера.';
+    } else if (canCam) {
+      // МОБИЛЬНЫМ ОСТАЁТСЯ КАМЕРА, И ЭТО НЕ ОТКАЗ, А ДРУГОЙ ПУТЬ. Третий путь называем
+      // словами: системная запись экрана и файл в комнату - не в реальном времени, зато
+      // с любого устройства.
+      showBtn.textContent = '📷 Показать камеру';
+      showBtn.style.display = '';
+      $('showhint').textContent = 'Показ экрана у телефонов недоступен - такой возможности нет '
+        + 'у мобильных браузеров. Запись экрана можно снять системой и прислать файлом в чат. '
+        + 'Смотреть чужой экран отсюда можно.';
+    } else {
+      $('showhint').textContent = 'Показывать нечем: этот клиент не даёт ни экрана, ни камеры. '
+        + 'Смотреть чужой экран можно.';
+    }
+    showBtn.onclick = async function () {
+      if (sharing) {
+        try { await room.localParticipant.unpublishTrack(sharing); } catch (e) {}
+        sharing = null; showBtn.classList.remove('on');
+        showBtn.textContent = canScreen ? '🖥 Показать экран' : '📷 Показать камеру';
+        return;
+      }
+      try {
+        if (canScreen) {
+          // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
+          // живёт на общем канале песочницы. Читаемость текста на экране даёт 1080p.
+          await room.localParticipant.setScreenShareEnabled(
+            true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } });
+        } else {
+          await room.localParticipant.setCameraEnabled(true);
+        }
+        sharing = true; showBtn.classList.add('on');
+        showBtn.textContent = canScreen ? '⏹ Остановить показ' : '⏹ Выключить камеру';
+      } catch (e) {
+        // ПРИЧИНА НАЗЫВАЕТСЯ ВСЕГДА: отказ в разрешении и отсутствие метода лечатся
+        // по-разному, и «не получилось» отправило бы человека чинить не то.
+        say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
+            + (e && e.message || e), true);
+      }
+    };
+
+    // ═══ РУКА И ОЧЕРЕДЬ СЛОВА - ПО КАНАЛУ ДАННЫХ LIVEKIT ═══
+    // Он идёт по тому же соединению, что звук: это на порядок быстрее опроса нашего ящика
+    // раз в 1.2-3 секунды, и ради трёх кнопок второй транспорт заводить незачем.
+    var handUp = false;
+    function send(obj) {
+      try {
+        room.localParticipant.publishData(
+          new TextEncoder().encode(JSON.stringify(obj)), { reliable: true });
+      } catch (e) {}
+    }
+    $('hand').onclick = function () {
+      handUp = !handUp;
+      $('hand').classList.toggle('on', handUp);
+      $('hand').textContent = handUp ? '✋ Опустить руку' : '✋ Поднять руку';
+      upsert(room.localParticipant.identity, { hand: handUp ? Date.now() : 0 });
+      send({ t: 'hand', up: handUp });
+    };
+    // ЗАГЛУШИТЬ ВСЕХ - ПРОСЬБА, А НЕ ПРИКАЗ, И ЭТО СКАЗАНО ЧЕСТНО. Серверного «замолчи»
+    // мы не шлём: для него нужен админский грант у каждого, а это право выключать чужой
+    // микрофон кому угодно. Клиенты глушат СЕБЯ сами; тот, кто не захочет, останется
+    // слышен - для лекции этого достаточно, для принуждения нет.
+    $('hush').style.display = '';
+    $('hush').onclick = function () { send({ t: 'hush' }); say('Попросил всех приглушиться.'); };
+
+    room.on(LK.RoomEvent.DataReceived, function (payload, p) {
+      var m = null;
+      try { m = JSON.parse(new TextDecoder().decode(payload)); } catch (e) { return; }
+      if (!m || !m.t) return;
+      if (m.t === 'hand' && p) upsert(p.identity, { hand: m.up ? Date.now() : 0 });
+      if (m.t === 'hush') {
+        micOn = false;
+        try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
+        $('mic').textContent = '🎙 Включить микрофон';
+        $('mic').classList.add('off');
+        say('Ведущий попросил тишины - твой микрофон выключен.');
+      }
+    });
+
     upsert(room.localParticipant.identity, { name: 'Ты', me: true });
     room.remoteParticipants.forEach(function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
