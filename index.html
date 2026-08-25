@@ -59,7 +59,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '96a0522ed17e';
+  var VERSION = '26cecd55757f';
   var q = new URLSearchParams(location.search);
   // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
   // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
@@ -150,6 +150,19 @@
   // выданного СТАРЫМ Worker'ом, там лежит uid - и комната показывала соседям столбик
   // голых чисел. Число вместо имени не сообщает НИЧЕГО и при этом светит чужой id,
   // поэтому оно заменяется словом, а не показывается «как есть».
+  // ЧТО НАМ ВООБЩЕ РАЗРЕШИЛИ. JWT это base64 - клиент читает свой грант, не спрашивая
+  // никого. Нужно вот зачем: страница и Worker выкладываются РАЗНЫМИ командами, и если
+  // приехала новая страница со старым токеном, кнопка показа есть, а права нет. LiveKit
+  // в этом случае НЕ отказывает - он ВИСИТ («waiting for pending publication promise
+  // timed out»), и по этому тексту причину не угадать (живой случай Ren 25.08).
+  function grantOf(token) {
+    try {
+      var b = String(token).split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+      var j = JSON.parse(decodeURIComponent(escape(atob(b + '='.repeat((4 - b.length % 4) % 4)))));
+      return (j && j.video) || {};
+    } catch (e) { return {}; }
+  }
+
   function human(name, id) {
     var n = String(name == null ? '' : name).trim();
     if (!n || n === String(id) || /^\d{5,}$/.test(n)) return 'Гость';
@@ -278,9 +291,18 @@
     // ПРОВЕРЯЕМ МЕТОД, А НЕ UserAgent: UA врёт (режим «для компьютеров» на телефоне),
     // наличие метода - факт.
     var md = navigator.mediaDevices || {};
-    var canScreen = !!md.getDisplayMedia, canCam = !!md.getUserMedia;
+    // ДВА УСЛОВИЯ, И ОНИ РАЗНЫЕ. Метод - что умеет КЛИЕНТ; грант - что разрешил СЕРВЕР.
+    // Второе без первого бесполезно, первое без второго ВИСНЕТ вместо отказа.
+    var g = grantOf(j.token), srcs = g.canPublishSources || [];
+    var mayScreen = srcs.indexOf('screen_share') >= 0, mayCam = srcs.indexOf('camera') >= 0;
+    var canScreen = !!md.getDisplayMedia && mayScreen, canCam = !!md.getUserMedia && mayCam;
     var showBtn = $('show'), sharing = null;
-    if (canScreen) {
+    if (!mayScreen && !mayCam && !!md.getDisplayMedia) {
+      // ГЛАВНОЕ СООБЩЕНИЕ ЭТОГО ЭКРАНА: причина НЕ в браузере и не в комнате.
+      $('showhint').textContent = 'Показ выключен на сервере: токен выдан без права '
+        + 'публикации экрана. Это у нас - Worker выложен старой версией, лечится '
+        + 'worker_deploy.deploy(). Смотреть чужой экран при этом можно.';
+    } else if (canScreen) {
       showBtn.textContent = '🖥 Показать экран';
       showBtn.style.display = '';
       $('showhint').textContent = 'Смотреть чужой экран можно откуда угодно, показывать - с компьютера.';
@@ -305,14 +327,21 @@
         return;
       }
       try {
-        if (canScreen) {
+        // ВИСЕТЬ НЕЛЬЗЯ: у LiveKit публикация без права уходит в бесконечное ожидание,
+        // и человек видит крутилку вместо причины. Своя граница по времени превращает
+        // зависание в НАЗВАННЫЙ отказ.
+        var pub = canScreen
           // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
           // живёт на общем канале песочницы. Читаемость текста на экране даёт 1080p.
-          await room.localParticipant.setScreenShareEnabled(
-            true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } });
-        } else {
-          await room.localParticipant.setCameraEnabled(true);
-        }
+          ? room.localParticipant.setScreenShareEnabled(
+              true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
+          : room.localParticipant.setCameraEnabled(true);
+        await Promise.race([pub, new Promise(function (_, rej) {
+          setTimeout(function () {
+            rej(new Error('сервер не принял дорожку за 12 с. Чаще всего это старый токен '
+                          + 'без права показа: у нас не выложен Worker.'));
+          }, 12000);
+        })]);
         sharing = true; showBtn.classList.add('on');
         showBtn.textContent = canScreen ? '⏹ Остановить показ' : '⏹ Выключить камеру';
       } catch (e) {
