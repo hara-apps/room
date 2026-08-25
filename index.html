@@ -47,7 +47,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'a126aeda8436';
+  var VERSION = 'bb39eccf9488';
   var q = new URLSearchParams(location.search);
   // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
   // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
@@ -62,6 +62,7 @@
     el.className = bad ? 'err' : '';
   }
   function sub(t) { $('sub').textContent = t; }
+  var connected = false;
 
   if (!ROOM) { sub('Комната не указана'); say('В ссылке нет параметра room.', true); return; }
   $('title').textContent = 'Комната: ' + ROOM;
@@ -91,10 +92,24 @@
 
   var room = null, people = {}, micOn = true;
 
+  // СКОЛЬКО ЧЕЛОВЕК В КОМНАТЕ - ОТДЕЛЬНОЙ СТРОКОЙ И ВСЕГДА. Список из одной строки «Ты»
+  // не отвечает на вопрос «я тут один или другие ещё не зашли»: это два разных решения -
+  // ждать или звать людей. Число считается ПО ТОМУ ЖЕ объекту, что рисует список, а не
+  // отдельным счётчиком - два счётчика разошлись бы на первом же выходе участника.
+  function headcount() {
+    var n = Object.keys(people).length;
+    if (n <= 1) return 'В комнате: только ты';
+    var tail = (n % 10 === 1 && n % 100 !== 11) ? 'человек'
+             : ((n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) ? 'человека'
+             : 'человек');
+    return 'В комнате: ' + n + ' ' + tail;
+  }
+
   function draw() {
     var box = $('people');
     box.innerHTML = '';
     var ids = Object.keys(people);
+    if (connected) sub(headcount());
     if (!ids.length) { box.innerHTML = '<div class="me">Пока никого</div>'; return; }
     ids.forEach(function (id) {
       var p = people[id];
@@ -106,6 +121,16 @@
       row.querySelector('.nm').textContent = p.name;
       box.appendChild(row);
     });
+  }
+
+  // ИМЯ ЧЕЛОВЕКА, А НЕ ЕГО TELEGRAM-ID. Токен несёт `name` из подписи, но у токена,
+  // выданного СТАРЫМ Worker'ом, там лежит uid - и комната показывала соседям столбик
+  // голых чисел. Число вместо имени не сообщает НИЧЕГО и при этом светит чужой id,
+  // поэтому оно заменяется словом, а не показывается «как есть».
+  function human(name, id) {
+    var n = String(name == null ? '' : name).trim();
+    if (!n || n === String(id) || /^\d{5,}$/.test(n)) return 'Гость';
+    return n;
   }
 
   function upsert(id, patch) {
@@ -150,7 +175,7 @@
     });
 
     room.on(LK.RoomEvent.ParticipantConnected, function (p) {
-      upsert(p.identity, { name: p.name || p.identity });
+      upsert(p.identity, { name: human(p.name, p.identity) });
     });
     room.on(LK.RoomEvent.ParticipantDisconnected, function (p) {
       delete people[p.identity]; draw();
@@ -174,6 +199,7 @@
     room.on(LK.RoomEvent.TrackMuted, function (_pub, p) { upsert(p.identity, { muted: true }); });
     room.on(LK.RoomEvent.TrackUnmuted, function (_pub, p) { upsert(p.identity, { muted: false }); });
     room.on(LK.RoomEvent.Disconnected, function (reason) {
+      connected = false;
       sub('Отключился');
       say('Соединение закрыто' + (reason ? ' (' + reason + ')' : '') + '.');
     });
@@ -190,11 +216,12 @@
       say('LiveKit: ' + (e && e.message || e), true);
       return;
     }
+    connected = true;
     upsert(room.localParticipant.identity, { name: 'Ты', me: true });
     room.remoteParticipants.forEach(function (p) {
-      upsert(p.identity, { name: p.name || p.identity });
+      upsert(p.identity, { name: human(p.name, p.identity) });
     });
-    sub('В комнате');
+    draw();          // строку «В комнате: N» рисует draw(), чтобы счёт был один на всех
     say('');
   }
 
