@@ -38,6 +38,17 @@
          color:#ff9aa0; font-size:13px; font-weight:600; }
   .rec::before { content:'⏺ '; animation:blink 1.6s infinite; }
   @keyframes blink { 50% { opacity:.25; } }
+  /* ФИЛЬТРЫ КАТАЛОГА ЖИВУТ ВНУТРИ СВОЕЙ КАРТОЧКИ, А НЕ ОТДЕЛЬНЫМ БЛОКОМ (закон №37):
+     ряд чипов, стоящий сам по себе, на первой же прокрутке уезжает под соседа, и от
+     кнопок остаётся нижняя половина. */
+  .chip { flex:0 0 auto; width:auto; padding:8px 12px; margin:0 6px 6px 0; font-size:13px;
+          font-weight:500; background:#25252e; border-radius:999px; }
+  .chip.on { background:#3a7afe; }
+  #rchips { display:flex; flex-wrap:wrap; }
+  #rlist { max-height:46vh; overflow-y:auto; }
+  button.station { display:flex; align-items:center; gap:10px; text-align:left; }
+  button.station img { width:26px; height:26px; border-radius:6px; object-fit:cover;
+                       flex:0 0 auto; background:#16161c; }
 </style>
 </head>
 <body>
@@ -56,7 +67,20 @@
   <button id="rec" class="wide" style="display:none">⏺ Записать созвон</button>
   <button id="dj" class="wide" style="display:none">📻 Включить радио</button>
   <p class="me" id="showhint"></p>
+  <!-- ПРИЧИНА, ПО КОТОРОЙ КНОПКИ НЕТ, ЖИВЁТ РЯДОМ С МЕСТОМ, ГДЕ ЕЁ ЖДУТ. Общая
+       строка состояния тут не годится: её перетирает следующее сообщение, и
+       объяснение исчезает через секунду - проверено браузером, чтением не видно. -->
+  <p class="me" id="recwhy"></p>
   <p class="me" id="audiodbg"></p>
+</div>
+
+<!-- КАТАЛОГ СТАНЦИЙ. Список приезжает ОТ БОТА: у него уже есть и фильтры, и
+     переводы подписей, и белый список источников. Второй клиент каталога прямо
+     отсюда разошёлся бы с Медиаплеером на первой правке (закон №40). -->
+<div class="card" id="radio" style="display:none">
+  <div id="rchips"></div>
+  <div id="rlist"></div>
+  <p class="me" id="rnote"></p>
 </div>
 
 <div id="bar">
@@ -70,7 +94,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '0d200be1064f';
+  var VERSION = 'c35f85a6ca38';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -118,6 +142,9 @@
   // комнате это помечено - участники должны понимать, кто с ними.
   var WEB = q.get('web') || '';
   var initData = (tg && tg.initData) || '';
+  // ЧТО СЕЙЧАС УМЕЕТ СЕРВЕР. null означает «не знаем» и трактуется как «нельзя»:
+  // показать кнопку по незнанию значит вернуть ровно ту, что обещала лишнее.
+  var CAPS = null;
   if (!initData && !WEB) {
     sub('Нет подписи Telegram');
     say('Открой комнату кнопкой из бота: без подписи сервер не знает, кто ты. '
@@ -277,6 +304,10 @@
           true);
       return;
     }
+    // ЧТО РАБОТАЕТ - ФАКТ С СЕРВЕРА, А НЕ ПРЕДПОЛОЖЕНИЕ СТРАНИЦЫ. Три состояния, и
+    // «не знаем» это НЕ «работает»: бот публикует признак регулярно, и молчание бота
+    // означает ровно то, что мы про запись ничего не знаем (fail-closed).
+    CAPS = (j && j.caps) || null;
 
     room = new LK.Room({
       // ВИДЕО ПОЯВИЛОСЬ (показ экрана и камера), значит адаптивный поток снова нужен:
@@ -388,11 +419,34 @@
       return out;
     }
 
+    // ═══ ЧТО БРАУЗЕР ВООБЩЕ УМЕЕТ ═══
+    // ЖИВОЙ ПРОГОН (Ren): «шумодав не сообщает · эхо вкл · громкость не сообщает · 96000 Гц
+    // · до браузера дошло не то». Моя прежняя строка обвиняла НАС - будто флаги потерялись
+    // по дороге. Но 96000 Гц это чистая улика: конвейер обработки Chrome работает на 48
+    // кГц, и родная частота устройства означает, что обработки НЕТ ВОВСЕ. А `getSettings()`
+    // молчит про noiseSuppression ровно тогда, когда браузер такого флага НЕ ЗНАЕТ (так
+    // ведёт себя Safari: у него из трёх есть только echoCancellation).
+    // ЗНАЧИТ ИСХОДОВ ТРИ, А НЕ ДВА, И ПУТАТЬ ИХ НЕЛЬЗЯ: «браузер не умеет» (лечится только
+    // своим шумодавом, встроенного там нет в принципе), «умеет, но до него не дошло» (это
+    // НАШ баг) и «дошло, но выключено» (чиним на месте). Одна фраза на три случая - ровно
+    // та подмена причины, из-за которой мы уже теряли круги.
+    function canDo(k) {
+      try {
+        var sup = (navigator.mediaDevices && navigator.mediaDevices.getSupportedConstraints)
+          ? navigator.mediaDevices.getSupportedConstraints() : null;
+        // НЕ СПРОСИТЬ - НЕ ЗНАЧИТ «НЕ УМЕЕТ». Отсутствие самого метода это отдельный
+        // случай, и объявлять по нему браузер неумелым было бы выдумкой.
+        return sup ? !!sup[k] : null;
+      } catch (e) { return null; }
+    }
+
     function flagLine(o) {
       var f = function (k) {
-        // ОТСУТСТВИЕ ПОЛЯ И false - РАЗНЫЕ ОТВЕТЫ. «Не сказали» значит браузер не
-        // сообщает о поддержке, а не «выключено», и лечится это по-разному.
-        return (k in o) ? (o[k] ? 'вкл' : 'ВЫКЛ') : 'не сообщает';
+        if (k in o) return o[k] ? 'вкл' : 'ВЫКЛ';
+        // ОТСУТСТВИЕ ПОЛЯ РАЗБИРАЕТСЯ ДО КОНЦА, а не сваливается в «не сообщает»: браузер,
+        // который такого флага не знает, и браузер, который знает и молчит, - разные миры.
+        var c = canDo(k);
+        return c === false ? 'НЕ УМЕЕТ' : 'не сообщает';
       };
       return 'шумодав ' + f('noiseSuppression') + ' · эхо ' + f('echoCancellation')
         + ' · громкость ' + f('autoGainControl')
@@ -406,17 +460,19 @@
         if (!ms) { box.textContent = 'микрофон ещё не опубликован'; return; }
 
         // ═══ ЧТО МЫ ПОПРОСИЛИ У БРАУЗЕРА НА САМОМ ДЕЛЕ ═══
-        // Это ОТВЕТ НА ВОПРОС «не перекрыл ли LiveKit наши флаги»: getConstraints()
-        // отдаёт то, с чем дорожка реально захвачена, а AUDIO_WANT - то, что мы просили.
-        // Расходятся - значит между нами и браузером кто-то вмешался, и это видно ЗДЕСЬ,
-        // а не выводится рассуждением о том, как SDK мержит умолчания.
+        // getConstraints() отдаёт то, с чем дорожка реально захвачена, AUDIO_WANT - то,
+        // что мы просили. Расходятся ПРИ ПОДДЕРЖИВАЕМОМ флаге - значит между нами и
+        // браузером кто-то вмешался, и это НАШ баг. Расходятся при неподдерживаемом -
+        // это свойство браузера, и кричать тут не о чем.
         var asked = {};
         try { asked = (ms.getConstraints && ms.getConstraints()) || {}; } catch (e) {}
-        var over = [];
+        var lost = [], cant = [];
         AUDIO_MUST.forEach(function (k) {
-          if (!(k in asked)) { over.push(k + ': не дошло'); return; }
+          var sup = canDo(k);
+          if (sup === false) { cant.push(k); return; }
+          if (!(k in asked)) { if (sup) lost.push(k + ': не дошло'); return; }
           var v = (asked[k] && typeof asked[k] === 'object') ? asked[k].ideal : asked[k];
-          if (v !== AUDIO_WANT[k]) over.push(k + ': просили ' + AUDIO_WANT[k] + ', ушло ' + v);
+          if (v !== AUDIO_WANT[k]) lost.push(k + ': просили ' + AUDIO_WANT[k] + ', ушло ' + v);
         });
 
         var got = (ms.getSettings && ms.getSettings()) || {};
@@ -439,9 +495,17 @@
           }
         }
 
+        // ЧАСТОТА И КАНАЛЫ - УЛИКА, А НЕ УКРАШЕНИЕ: конвейер обработки Chrome работает на
+        // 48 кГц, и родная частота устройства (96 кГц у внешних карт) означает сырой
+        // захват без обработки. Мы sampleRate/channelCount НЕ ЗАДАЁМ НИГДЕ - это видно по
+        // AUDIO_WANT, - поэтому цифра говорит о выборе браузера, а не о нашей просьбе.
         box.textContent = 'звук: ' + flagLine(got)
-          + ' · ' + (got.sampleRate || '?') + ' Гц' + fixed
-          + (over.length ? ' · ⚠️ до браузера дошло не то (' + over.join('; ') + ')' : '');
+          + ' · ' + (got.sampleRate || '?') + ' Гц'
+          + (got.channelCount ? (' · ' + got.channelCount + ' кан') : '') + fixed
+          + (cant.length ? (' · браузер НЕ УМЕЕТ: ' + cant.join(', ')
+                            + ' - встроенного подавления тут нет в принципе') : '')
+          + (lost.length ? (' · ⚠️ НАШ БАГ, не дошло до браузера (' + lost.join('; ') + ')')
+                         : '');
       } catch (e) { box.textContent = 'настройки звука не спросить: ' + e; }
     }
 
@@ -594,7 +658,18 @@
     // ответ -> мы его показываем. Задержку НАЗЫВАЕМ, а не прячем за крутилкой.
     // ВЕБ-ГОСТЮ КНОПКИ НЕТ ВОВСЕ: ящик принимает только подпись Telegram, и кнопка,
     // которая молча ничего не делает, хуже отсутствующей.
-    if (initData) {
+    // КНОПКА ЕСТЬ ТОЛЬКО ТАМ, ГДЕ ЕЙ ЕСТЬ ЧЕМ ОТВЕТИТЬ. Живой прогон Ren: Egress отдавал
+    // 401, кнопка стояла на месте, и каждый тап давал непонятную ошибку. Обещание без
+    // механизма хуже отсутствия функции. Но и молча исчезнуть она не имеет права -
+    // исчезнувшая кнопка читается как «функции нет вовсе» (закон №36), поэтому причина
+    // стоит СТРОКОЙ. Признак приезжает вместе с токеном, лишнего запроса нет.
+    var canRec = CAPS ? CAPS.record : null;
+    if (initData && canRec !== true) {
+      var w = (CAPS && CAPS.why) || 'бот не сообщил, работает ли запись';
+      $('recwhy').textContent = 'Записать созвон сейчас нельзя: ' + w
+        + '. Кнопки поэтому нет - она бы обещала то, чего нет.';
+    }
+    if (initData && canRec === true) {
       var recBtn = $('rec');
       recBtn.style.display = '';
       showRec();          // кнопка появилась - подпись обязана отвечать состоянию комнаты
@@ -629,8 +704,10 @@
               : 'Бот не принял просьбу (' + r.status + '): ' + why, true);
           return false;
         }
-        await waitRec(j.id);
-        return true;
+        // ОТВЕТ БОТА ВОЗВРАЩАЕТСЯ НАВЕРХ ЦЕЛИКОМ: каталогу станций нужен не факт
+        // «дошло», а сами данные. Раньше дверь отдавала true/false, и второй вызывающий
+        // завёл бы себе свой круг опроса - две копии разошлись бы на первой правке.
+        return await waitRec(j.id);
       } catch (e) {
         say('Не достучался до бота: ' + (e && e.message || e), true);
         return false;
@@ -647,16 +724,67 @@
       djBtn.style.display = '';
       showRec();
       djBtn.onclick = async function () {
-        var nm = '';
-        if (!djOn) {
-          try { nm = (prompt('Какую станцию? (пусто - на мой вкус)') || '').slice(0, 60); }
-          catch (e) { nm = ''; }
+        if (djOn) {
+          djBtn.disabled = true;
+          say('Выключаю радио…');
+          await ask({ kind: 'rtcdj', room: ROOM });
+          djBtn.disabled = false;
+          return;
         }
-        djBtn.disabled = true;
-        say(djOn ? 'Выключаю радио…' : 'Ищу станцию…');
-        await ask({ kind: 'rtcdj', room: ROOM, nm: nm });
-        djBtn.disabled = false;
+        // НЕ СПРАШИВАЕМ БУКВЫ ТАМ, ГДЕ ЕСТЬ СПИСОК. Ввод названия руками был работой,
+        // переложенной на человека: у нас есть готовый каталог со странами, жанрами,
+        // обложками и его же избранным.
+        var panel = $('radio');
+        if (panel.style.display !== 'none') { panel.style.display = 'none'; return; }
+        panel.style.display = '';
+        await openRadio('');
       };
+    }
+
+    // ═══ КАТАЛОГ СТАНЦИЙ: ФИЛЬТРЫ И СПИСОК ПРИЕЗЖАЮТ ОТ БОТА ═══
+    // ПОДПИСИ ТОЖЕ ЕГО: он знает язык человека, а вторая таблица «страны и жанры» здесь
+    // означала бы, что в комнате и в плеере со временем окажутся разные наборы.
+    async function openRadio(key) {
+      $('rnote').textContent = 'Спрашиваю каталог у бота, это пара секунд…';
+      var res = await ask({ kind: 'rtcdj', room: ROOM, list: key || 'c:ru' });
+      if (!res) { $('rnote').textContent = 'Каталог не приехал. Попробуй ещё раз.'; return; }
+      var chips = $('rchips');
+      chips.innerHTML = '';
+      (res.chips || []).forEach(function (c) {
+        var b = document.createElement('button');
+        b.className = 'chip' + (c.k === res.key ? ' on' : '');
+        b.textContent = c.label;
+        b.onclick = function () { openRadio(c.k); };
+        chips.appendChild(b);
+      });
+      var list = $('rlist');
+      list.innerHTML = '';
+      (res.stations || []).forEach(function (st) {
+        var b = document.createElement('button');
+        b.className = 'wide station';
+        // ОБЛОЖКА - УКРАШЕНИЕ, И ЕЁ ОТСУТСТВИЕ НЕ ИМЕЕТ ПРАВА ЛОМАТЬ СТРОКУ: битую
+        // картинку прячем, а не оставляем пустой квадрат (тот же приём, что в плеере).
+        if (st.fav) {
+          var im = document.createElement('img');
+          im.src = st.fav;
+          im.onerror = function () { im.style.display = 'none'; };
+          b.appendChild(im);
+        }
+        var sp = document.createElement('span');
+        sp.textContent = st.name + (st.country ? ' · ' + st.country : '');
+        b.appendChild(sp);
+        b.onclick = async function () {
+          $('rnote').textContent = 'Включаю ' + st.name + '…';
+          // ЕДЕТ ИДЕНТИФИКАТОР, А НЕ АДРЕС: поток резолвит бот, и белый список
+          // источников остаётся непроходимым.
+          await ask({ kind: 'rtcdj', room: ROOM, st: st.id });
+          $('radio').style.display = 'none';
+        };
+        list.appendChild(b);
+      });
+      // ПУСТО И «КАТАЛОГ МОЛЧИТ» - РАЗНЫЕ ВЕЩИ, И ОБЕ НАЗЫВАЮТСЯ СВОИМИ СЛОВАМИ.
+      $('rnote').textContent = res.why
+        || ((res.stations || []).length ? '' : 'Здесь пусто - выбери другой фильтр.');
     }
 
     // ОТВЕТ ЗАБИРАЕМ ИЗ ЯЩИКА, А НЕ СЧИТАЕМ РАБОТУ СДЕЛАННОЙ ПО ФАКТУ ОТПРАВКИ (закон
@@ -673,12 +801,13 @@
         } catch (e) { continue; }
         if (!res || res.state !== 'done') continue;
         var note = (res.res && res.res.note) || '';
-        say(note || 'Готово.');
-        return;
+        if (note) say(note);
+        return res.res || {};
       }
       // МОЛЧАНИЕ НАЗЫВАЕТСЯ МОЛЧАНИЕМ. Крутилка без конца читается как «сломалось», а
       // индикатор записи придёт сам, когда бот дойдёт: он живёт в метаданных комнаты.
       say('Бот пока не ответил. Если запись пойдёт, наверху появится красная строка.');
+      return null;
     }
 
     room.on(LK.RoomEvent.DataReceived, function (payload, p) {
