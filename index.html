@@ -32,11 +32,18 @@
   #screens video { width:100%; border-radius:10px; margin:8px 0; background:#000; }
   .hand { color:#ffd166; font-size:12px; }
   .err { color:var(--bad); }
+  /* ИНДИКАТОР ЗАПИСИ ВИДЕН БЕЗ ПОИСКА ГЛАЗАМИ: он про то, что разговор сохраняется, и
+     прятать его среди служебных строк нельзя. Мигание - чтобы он не читался как ярлык. */
+  .rec { margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#3a1d20;
+         color:#ff9aa0; font-size:13px; font-weight:600; }
+  .rec::before { content:'⏺ '; animation:blink 1.6s infinite; }
+  @keyframes blink { 50% { opacity:.25; } }
 </style>
 </head>
 <body>
 <h1 id="title">Голосовая комната</h1>
 <p class="sub" id="sub">Подключаюсь…</p>
+<p id="recbar" class="rec" style="display:none"></p>
 <div class="card" id="people"></div>
 <div id="screens"></div>
 <p id="state"></p>
@@ -46,7 +53,9 @@
   <button id="show" class="wide" style="display:none"></button>
   <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
   <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
+  <button id="rec" class="wide" style="display:none">⏺ Записать созвон</button>
   <p class="me" id="showhint"></p>
+  <p class="me" id="audiodbg"></p>
 </div>
 
 <div id="bar">
@@ -60,7 +69,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'ec194302840e';
+  var VERSION = 'bad5838667fa';
   var q = new URLSearchParams(location.search);
   // АДРЕС ЭНДПОИНТА И ИМЯ КОМНАТЫ - ПАРАМЕТРАМИ ССЫЛКИ, а не вшиты при сборке. Страница
   // ОДНА на всех ботов и на любую комнату; вшитое имя означало бы отдельную выкладку под
@@ -108,7 +117,33 @@
     return;
   }
 
-  var room = null, people = {}, micOn = true;
+  var room = null, people = {}, micOn = true, recOn = false;
+
+  // СОСТОЯНИЕ ЗАПИСИ ЧИТАЕТСЯ У КОМНАТЫ, А НЕ ХРАНИТСЯ У НАС. Свой флажок разошёлся бы с
+  // сервером на первом же падении Egress, и кнопка предлагала бы остановить то, что уже
+  // не пишется. Метаданные ставит БОТ - он же владеет записью (закон №40: одна дверь).
+  var lastMeta = '';
+  function showRec(meta) {
+    // ПОСЛЕДНЕЕ СОСТОЯНИЕ ПОМНИМ, потому что кнопка появляется ПОЗЖЕ первой отрисовки:
+    // порядок строк в `go()` не должен решать, что написано на кнопке. Вошедший при
+    // идущей записи видел «⏺ Записать созвон», хотя тап её ОСТАНОВИТ, - подпись врала о
+    // последствии (поймано браузерным прогоном, чтением кода не видно).
+    if (meta !== undefined) lastMeta = meta || '';
+    var m = null;
+    try { m = JSON.parse(lastMeta || '{}'); } catch (e) { m = null; }
+    recOn = !!(m && m.rec);
+    var bar = $('recbar');
+    bar.style.display = recOn ? '' : 'none';
+    if (recOn) {
+      bar.textContent = 'Идёт запись созвона' + (m && m.by ? ' (включил: ' + m.by + ')' : '')
+        + '. Транскрипт придёт в чат тому, кто её остановит.';
+    }
+    var btn = $('rec');
+    if (btn.style.display !== 'none') {
+      btn.classList.toggle('on', recOn);
+      btn.textContent = recOn ? '⏹ Остановить запись' : '⏺ Записать созвон';
+    }
+  }
 
   // СКОЛЬКО ЧЕЛОВЕК В КОМНАТЕ - ОТДЕЛЬНОЙ СТРОКОЙ И ВСЕГДА. Список из одной строки «Ты»
   // не отвечает на вопрос «я тут один или другие ещё не зашли»: это два разных решения -
@@ -263,6 +298,11 @@
       Object.keys(people).forEach(function (id) { people[id].speaking = !!now[id]; });
       draw();
     });
+    // ═══ ИНДИКАТОР ЗАПИСИ - ИЗ МЕТАДАННЫХ КОМНАТЫ, А НЕ ИЗ РАССЫЛКИ ПО КАНАЛУ ДАННЫХ ═══
+    // Рассылку не услышит тот, кто зашёл ПОЗЖЕ, то есть индикатор молчал бы ровно тому,
+    // кого он должен предупредить. Метаданные LiveKit отдаёт каждому при входе и шлёт
+    // всем при смене - это состояние комнаты, а не чьё-то сообщение.
+    room.on(LK.RoomEvent.RoomMetadataChanged, function (m) { showRec(m); });
     room.on(LK.RoomEvent.TrackMuted, function (_pub, p) { upsert(p.identity, { muted: true }); });
     room.on(LK.RoomEvent.TrackUnmuted, function (_pub, p) { upsert(p.identity, { muted: false }); });
     room.on(LK.RoomEvent.Disconnected, function (reason) {
@@ -284,6 +324,42 @@
       return;
     }
     connected = true;
+    // ЗАПИСЬ МОГЛА НАЧАТЬСЯ ДО НАШЕГО ВХОДА, И ЭТО ГЛАВНЫЙ СЛУЧАЙ, РАДИ КОТОРОГО
+    // индикатор живёт в метаданных: вошедший позже обязан узнать о записи сразу, а не
+    // остаться единственным, кто о ней не знает.
+    showRec(room.metadata);
+
+    // ═══ ЧТО БРАУЗЕР ПРИМЕНИЛ НА САМОМ ДЕЛЕ ═══
+    // Мы ПРОСИМ echoCancellation/noiseSuppression/autoGainControl в audioCaptureDefaults,
+    // но просьба и факт - разные вещи: часть клиентов молча игнорирует флаг, а на части
+    // платформ обработку делает ОС и браузер её отключает. Живой случай (Ren 25.08): у
+    // собеседницы шёл РОВНЫЙ ГУЛ, с которым встроенное подавление обязано справляться, -
+    // значит вопрос не «слабое ли оно», а «включилось ли вообще».
+    // getSettings() отдаёт ПРИМЕНЁННЫЕ значения, и печатаем мы их НА СТРАНИЦЕ, а не в
+    // консоль: до консоли на телефоне не добраться.
+    function audioFacts() {
+      try {
+        var pubs = room.localParticipant.trackPublications
+                || room.localParticipant.tracks || new Map();
+        var out = null;
+        pubs.forEach(function (pub) {
+          if (String(pub.source || '') !== 'microphone' || !pub.track) return;
+          var ms = pub.track.mediaStreamTrack;
+          if (ms && ms.getSettings) out = ms.getSettings();
+        });
+        if (!out) { $('audiodbg').textContent = 'микрофон ещё не опубликован'; return; }
+        var f = function (k) {
+          // ОТСУТСТВИЕ ПОЛЯ И false - РАЗНЫЕ ОТВЕТЫ. «Не сказали» значит браузер не
+          // сообщает о поддержке, а не «выключено», и лечится это по-разному.
+          return (k in out) ? (out[k] ? 'вкл' : 'ВЫКЛ') : 'не сообщает';
+        };
+        $('audiodbg').textContent = 'звук: шумодав ' + f('noiseSuppression')
+          + ' · эхо ' + f('echoCancellation') + ' · громкость ' + f('autoGainControl')
+          + ' · ' + (out.sampleRate || '?') + ' Гц'
+          + (out.deviceId ? '' : '');
+      } catch (e) { $('audiodbg').textContent = 'настройки звука не спросить: ' + e; }
+    }
+    setTimeout(audioFacts, 800);
 
     // ═══ ПОКАЗ ЭКРАНА: КНОПКА ПО НАЛИЧИЮ МЕТОДА, А НЕ ПО ПЛАТФОРМЕ ═══
     // Живая проба (Ren 24.08): desktop отдаёт поток 2880x1448@30 со звуком вкладки,
@@ -424,6 +500,69 @@
     // слышен - для лекции этого достаточно, для принуждения нет.
     $('hush').style.display = '';
     $('hush').onclick = function () { send({ t: 'hush' }); say('Попросил всех приглушиться.'); };
+
+    // ═══ ЗАПИСЬ: КНОПКА ЖМЁТ БОТА, А НЕ LIVEKIT ═══
+    // Ключом от Egress владеет БОТ - он же потом идёт за файлами и сшивает транскрипт.
+    // Дай мы это право странице или Worker'у, ответ на вопрос «кто управляет записью»
+    // стал бы двойным. Отсюда путь: сигнал в ящик -> бот забирает (1.2-3 с) -> кладёт
+    // ответ -> мы его показываем. Задержку НАЗЫВАЕМ, а не прячем за крутилкой.
+    // ВЕБ-ГОСТЮ КНОПКИ НЕТ ВОВСЕ: ящик принимает только подпись Telegram, и кнопка,
+    // которая молча ничего не делает, хуже отсутствующей.
+    if (initData) {
+      var recBtn = $('rec');
+      recBtn.style.display = '';
+      showRec();          // кнопка появилась - подпись обязана отвечать состоянию комнаты
+      recBtn.onclick = async function () {
+        recBtn.disabled = true;
+        say(recOn ? 'Останавливаю запись…' : 'Прошу бота начать запись…');
+        try {
+          var r = await fetch(API + '/signal', {
+            method: 'POST',
+            headers: { 'X-Init-Data': initData, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ kind: 'rtcrec', room: ROOM }),
+          });
+          var j = await r.json();
+          if (!r.ok || !j || !j.id) {
+            // ДВА РАЗНЫХ МИРА ПОД ОДНИМ КОДОМ 400. `bad_kind` означает, что Worker
+            // выложен СТАРОЙ версией и про запись не знает вовсе, - это у нас, лечится
+            // деплоем, и человеку незачем гадать. Тот же класс, что уже дважды стоил
+            // круга: страница и Worker выкладываются разными командами.
+            var why = (j && (j.why || j.error)) || 'без причины';
+            say(why === 'bad_kind'
+                ? 'Запись не подключена: Worker выложен старой версией и про неё не знает. '
+                  + 'Это у нас - worker_deploy.deploy().'
+                : 'Бот не принял просьбу (' + r.status + '): ' + why, true);
+          } else {
+            await waitRec(j.id);
+          }
+        } catch (e) {
+          say('Не достучался до бота: ' + (e && e.message || e), true);
+        }
+        recBtn.disabled = false;
+      };
+    }
+
+    // ОТВЕТ ЗАБИРАЕМ ИЗ ЯЩИКА, А НЕ СЧИТАЕМ РАБОТУ СДЕЛАННОЙ ПО ФАКТУ ОТПРАВКИ (закон
+    // №35): «сигнал положен» и «бот записывает» - разные утверждения, и второе бывает
+    // ложным (нет ключей, никто не включил микрофон, Egress не поднят).
+    async function waitRec(id) {
+      for (var i = 0; i < 20; i++) {
+        await new Promise(function (ok) { setTimeout(ok, 1200); });
+        var res = null;
+        try {
+          var rr = await fetch(API + '/result?id=' + encodeURIComponent(id),
+                               { headers: { 'X-Init-Data': initData } });
+          res = await rr.json();
+        } catch (e) { continue; }
+        if (!res || res.state !== 'done') continue;
+        var note = (res.res && res.res.note) || '';
+        say(note || 'Готово.');
+        return;
+      }
+      // МОЛЧАНИЕ НАЗЫВАЕТСЯ МОЛЧАНИЕМ. Крутилка без конца читается как «сломалось», а
+      // индикатор записи придёт сам, когда бот дойдёт: он живёт в метаданных комнаты.
+      say('Бот пока не ответил. Если запись пойдёт, наверху появится красная строка.');
+    }
 
     room.on(LK.RoomEvent.DataReceived, function (payload, p) {
       var m = null;
