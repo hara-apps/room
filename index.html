@@ -66,6 +66,12 @@
   <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
   <button id="rec" class="wide" style="display:none">⏺ Записать созвон</button>
   <button id="dj" class="wide" style="display:none">📻 Включить радио</button>
+  <!-- ГРОМКОСТЬ РАДИО - У КАЖДОГО СВОЯ. Ползунок появляется вместе с дорожкой радио и
+       исчезает вместе с ней: регулятор того, чего не играет, читается как «сломано». -->
+  <div id="djvol" style="display:none">
+    <label class="me" for="djv" id="djvlab"></label>
+    <input id="djv" type="range" min="0" max="100" step="5">
+  </div>
   <p class="me" id="showhint"></p>
   <!-- ПРИЧИНА, ПО КОТОРОЙ КНОПКИ НЕТ, ЖИВЁТ РЯДОМ С МЕСТОМ, ГДЕ ЕЁ ЖДУТ. Общая
        строка состояния тут не годится: её перетирает следующее сообщение, и
@@ -79,6 +85,11 @@
      переводы подписей, и белый список источников. Второй клиент каталога прямо
      отсюда разошёлся бы с Медиаплеером на первой правке (закон №40). -->
 <div class="card" id="radio" style="display:none">
+  <!-- ПОИСК ПО НАЗВАНИЮ. Живой прогон Ren: «Спокойное радио» не попадает ни под один
+       жанровый чип, и без поиска до него не добраться вовсе. Ищет БОТ тем же каталогом,
+       что и фильтры - второй клиент radio-browser прямо отсюда разошёлся бы с плеером. -->
+  <input id="rq" type="search" autocomplete="off" spellcheck="false"
+         placeholder="Поиск станции по названию">
   <div id="rchips"></div>
   <div id="rlist"></div>
   <p class="me" id="rnote"></p>
@@ -95,7 +106,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '48dd01e070f5';
+  var VERSION = '8e4b494ffd04';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -326,13 +337,70 @@
       audioCaptureDefaults: AUDIO_WANT,
     });
 
+    // ЭТОТ БЛОК СТОИТ ДО РЕГИСТРАЦИИ СОБЫТИЙ НАРОЧНО: `room.connect()` ниже, а
+    // подписка на дорожку радио приходит СРАЗУ после него - бот уже в комнате.
+    // Объяви мы `DJ_ID` ниже по файлу, первый же `TrackSubscribed` сравнивал бы
+    // identity с `undefined`, громкость не ставилась бы вовсе, и выглядело бы это
+    // как «ползунок не работает». Тот же класс, что подпись кнопки записи, которая
+    // зависела от порядка строк, а не от состояния.
+    // ═══════════════ ГРОМКОСТЬ РАДИО ═══════════════
+    // РАДИО - ФОН ПОД РАЗГОВОР, И ЭТО ЕГО СМЫСЛ, А НЕ НАСТРОЙКА ПО ВКУСУ. Вровень с
+    // голосами оно мешает ровно тому, ради чего люди собрались.
+    // ПОЧЕМУ КЛИЕНТСКАЯ СТОРОНА: у LiveKit громкость чужой дорожки живёт у СЛУШАТЕЛЯ
+    // (`RemoteAudioTrack.setVolume`), серверной ручки «этому участнику тише» нет вовсе - и
+    // правильно, что нет: одному фон мешает, другому нет, и решать это за всех нельзя.
+    var DJ_ID = 'bot-dj';                 // identity бота-диджея, тот же, что в rtc_dj.py
+    var DJ_VOL_DEFAULT = 25;              // проценты: заметно тише голоса (условие Ren)
+    var djTrack = null;
+    var djVol = DJ_VOL_DEFAULT;
+    try {
+        // ВЫБОР ЧЕЛОВЕКА ПЕРЕЖИВАЕТ ПЕРЕОТКРЫТИЕ: комнату открывают по несколько раз за
+        // созвон, и каждый раз двигать ползунок заново - это работа, переложенная на него.
+        var _sv = localStorage.getItem('rtc_dj_vol');
+        if (_sv !== null && _sv !== '') djVol = Math.max(0, Math.min(100, parseInt(_sv, 10) || 0));
+    } catch (e) { }
+
+    function isDj(p) {
+        return !!p && String(p.identity || '') === DJ_ID;
+    }
+
+    function applyDjVolume() {
+        if (!djTrack || !djTrack.setVolume) return false;
+        try { djTrack.setVolume(djVol / 100); return true; } catch (e) { return false; }
+    }
+
+    function showDjVol(on) {
+        var box = $('djvol');
+        if (!box) return;
+        box.style.display = on ? '' : 'none';
+        if (!on) return;
+        var sl = $('djv');
+        sl.value = String(djVol);
+        $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
+        sl.oninput = function () {
+            djVol = parseInt(sl.value, 10) || 0;
+            $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
+            // ПРИМЕНЯЕМ СРАЗУ, А НЕ ПО ОТПУСКАНИЮ: человек ведёт ползунок и слушает, что
+            // получается, - иначе он подбирает значение вслепую.
+            applyDjVolume();
+            try { localStorage.setItem('rtc_dj_vol', String(djVol)); } catch (e) { }
+        };
+    }
+
     room.on(LK.RoomEvent.ParticipantConnected, function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
     });
     room.on(LK.RoomEvent.ParticipantDisconnected, function (p) {
+      if (isDj(p)) { djTrack = null; showDjVol(false); }
       delete people[p.identity]; draw();
     });
-    room.on(LK.RoomEvent.TrackUnsubscribed, function (track) {
+    room.on(LK.RoomEvent.TrackUnsubscribed, function (track, _pub2, p2) {
+      if (track.kind === 'audio') {
+        // РАДИО ВЫКЛЮЧИЛИ - ПОЛЗУНОК УХОДИТ ВМЕСТЕ С НИМ. Регулятор громкости того, чего
+        // не играет, читается как «сломано»: человек двигает его и ничего не происходит.
+        if (isDj(p2) || track === djTrack) { djTrack = null; showDjVol(false); }
+        return;
+      }
       if (track.kind !== 'video') return;
       // ЧУЖОЕ ВИДЕО УБИРАЕТСЯ, КОГДА ЕГО ПЕРЕСТАЛИ ДАВАТЬ. Оставленный чёрный
       // прямоугольник читается как «зависло».
@@ -359,6 +427,13 @@
         el.setAttribute('playsinline', '');
         el.style.display = 'none';
         document.body.appendChild(el);
+        // ═══ РАДИО ИГРАЕТ ФОНОМ, А НЕ ВРОВЕНЬ С ГОЛОСАМИ ═══
+        // Живой прогон Ren: «мы делали радио, чтобы играло ФОНОМ под разговор - тихо».
+        // Громкость КЛИЕНТСКАЯ и у каждого своя: серверной ручки «сделай этому участнику
+        // тише» у LiveKit нет, да она и не нужна - одному фон мешает, другому нет.
+        // СТАВИТСЯ СРАЗУ ПРИ ПОДПИСКЕ, А НЕ ПОСЛЕ ПЕРВОГО ДВИЖЕНИЯ ПОЛЗУНКА: иначе первые
+        // секунды радио бьёт по ушам, и человек лезет искать регулятор уже раздражённым.
+        if (isDj(p)) { djTrack = track; applyDjVolume(); showDjVol(true); }
       }
     });
     room.on(LK.RoomEvent.ActiveSpeakersChanged, function (spk) {
@@ -449,9 +524,34 @@
         var c = canDo(k);
         return c === false ? 'НЕ УМЕЕТ' : 'не сообщает';
       };
-      return 'шумодав ' + f('noiseSuppression') + ' · эхо ' + f('echoCancellation')
+      // ═══ ЭТО СТРОКА ПРО БРАУЗЕР, А НЕ ПРО НАШ ШУМОДАВ ═══
+      // ЖИВОЙ ПРОГОН REN 26.08: человек включил RNNoise, кнопка честно переключилась на
+      // «Выключить шумодав», а строка осталась «шумодав НЕ УМЕЕТ». И она была ПРАВА - про
+      // ВСТРОЕННОЕ подавление браузера, - но читалась как «шумодава нет», то есть отрицала
+      // то, что человек только что включил. Двум разным вещам нужны два разных имени.
+      return 'встроенный шумодав ' + f('noiseSuppression') + ' · эхо ' + f('echoCancellation')
         + ' · громкость ' + f('autoGainControl')
         + (('voiceIsolation' in o) ? (' · голос ' + f('voiceIsolation')) : '');
+    }
+
+    // ═══ НАШ ШУМОДАВ - СВОЯ СТРОКА, И ОНА ПЕРЕРИСОВЫВАЕТСЯ ПО ТАПУ ═══
+    // Состояние браузера меряется один раз при захвате, а наш RNNoise человек включает и
+    // выключает - значит строка обязана следовать за ним, иначе она отвечает на вчерашний
+    // вопрос. Текст храним отдельно от браузерной части: смешав их в одну строку, мы
+    // получили бы то же самое, только длиннее.
+    var AUDIO_TXT = '';
+
+    function rnnSuffix() {
+      if (RNN_ON) return ' · НАШ шумодав (RNNoise): ВКЛЮЧЁН, обрабатываю сам';
+      if ($('rnn') && $('rnn').style.display !== 'none') {
+        return ' · НАШ шумодав (RNNoise): выключен, можно включить кнопкой';
+      }
+      return '';
+    }
+
+    function paintAudio() {
+      var box = $('audiodbg');
+      if (box) box.textContent = AUDIO_TXT + rnnSuffix();
     }
 
     async function audioFacts() {
@@ -500,7 +600,7 @@
         // 48 кГц, и родная частота устройства (96 кГц у внешних карт) означает сырой
         // захват без обработки. Мы sampleRate/channelCount НЕ ЗАДАЁМ НИГДЕ - это видно по
         // AUDIO_WANT, - поэтому цифра говорит о выборе браузера, а не о нашей просьбе.
-        box.textContent = 'звук: ' + flagLine(got)
+        AUDIO_TXT = 'браузер: ' + flagLine(got)
           + ' · ' + (got.sampleRate || '?') + ' Гц'
           + (got.channelCount ? (' · ' + got.channelCount + ' кан') : '') + fixed
           + (cant.length ? (' · браузер НЕ УМЕЕТ: ' + cant.join(', ')
@@ -519,9 +619,10 @@
           rnnBtn.onclick = function () { rnnToggle(rnnBtn); };
           // ЧЕСТНЫЙ СОВЕТ, А НЕ ТОЛЬКО КНОПКА (требование Ren): у нашего шумодава своя
           // цена, а браузер ту же работу делает лучше и даром. Человек вправе выбрать.
-          box.textContent += ' · встроенного подавления тут нет: включи «Подавить шум»'
+          AUDIO_TXT += ' · встроенного подавления тут нет: включи «Подавить шум»'
             + ' либо открой комнату в обычном браузере - там оно есть и работает лучше';
         }
+        paintAudio();
       } catch (e) { box.textContent = 'настройки звука не спросить: ' + e; }
     }
 
@@ -732,6 +833,10 @@ registerProcessor('rnn-denoise', RnnProc);
       btn.classList.toggle('on', RNN_ON);
       btn.textContent = RNN_ON ? '🔊 Выключить шумодав' : '🔇 Подавить шум';
       btn.disabled = false;
+      // СТРОКА СЛЕДУЕТ ЗА СОСТОЯНИЕМ, А НЕ ЗА ПОРЯДКОМ СТРОК. Без этого человек включал
+      // шумодав и продолжал читать, что шумодава нет: строка меряет БРАУЗЕР и обновляется
+      // один раз при захвате, а наш RNNoise живёт по кнопке.
+      paintAudio();
     }
 
     // ═══ ПОКАЗ ЭКРАНА: КНОПКА ПО НАЛИЧИЮ МЕТОДА, А НЕ ПО ПЛАТФОРМЕ ═══
@@ -962,6 +1067,20 @@ registerProcessor('rnn-denoise', RnnProc);
         panel.style.display = '';
         await openRadio('');
       };
+      // ═══ ПОИСК: ЖДЁМ, ПОКА ЧЕЛОВЕК ДОПЕЧАТАЕТ ═══
+      // Каждый запрос идёт ЧЕРЕЗ ЯЩИК (1.2-3 с), и посылать его на каждую букву значило бы
+      // очередь из десяти просьб на слово «спокойное», из которых нужна последняя. Пауза
+      // после последнего нажатия - и один запрос вместо десяти.
+      var rqT = null;
+      $('rq').oninput = function () {
+        if (rqT) clearTimeout(rqT);
+        var v = $('rq').value.trim();
+        rqT = setTimeout(function () {
+          // ПУСТАЯ СТРОКА - ЭТО НЕ ПОИСК ПУСТОТЫ, А ВОЗВРАТ К ФИЛЬТРАМ: человек стёр
+          // запрос, и список обязан вернуться туда, откуда он ушёл.
+          openRadio(v ? 'q:' + v : '');
+        }, 600);
+      };
     }
 
     // ═══ КАТАЛОГ СТАНЦИЙ: ФИЛЬТРЫ И СПИСОК ПРИЕЗЖАЮТ ОТ БОТА ═══
@@ -977,7 +1096,12 @@ registerProcessor('rnn-denoise', RnnProc);
         var b = document.createElement('button');
         b.className = 'chip' + (c.k === res.key ? ' on' : '');
         b.textContent = c.label;
-        b.onclick = function () { openRadio(c.k); };
+        b.onclick = function () {
+          // ТАП ПО ФИЛЬТРУ СТИРАЕТ ЗАПРОС. Иначе на экране одновременно «ищу Спокойное» и
+          // подсвеченный чип «Джаз» - два разных ответа на вопрос «что я сейчас вижу».
+          $('rq').value = '';
+          openRadio(c.k);
+        };
         chips.appendChild(b);
       });
       var list = $('rlist');
