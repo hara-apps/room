@@ -71,6 +71,7 @@
        строка состояния тут не годится: её перетирает следующее сообщение, и
        объяснение исчезает через секунду - проверено браузером, чтением не видно. -->
   <p class="me" id="recwhy"></p>
+  <button id="rnn" class="wide" style="display:none">🔇 Подавить шум</button>
   <p class="me" id="audiodbg"></p>
 </div>
 
@@ -94,7 +95,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'c35f85a6ca38';
+  var VERSION = 'c69a3ad77b81';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -506,10 +507,193 @@
                             + ' - встроенного подавления тут нет в принципе') : '')
           + (lost.length ? (' · ⚠️ НАШ БАГ, не дошло до браузера (' + lost.join('; ') + ')')
                          : '');
+
+        // ═══ СВОЙ ШУМОДАВ ПРЕДЛАГАЕМ ТОЛЬКО ТАМ, ГДЕ ВСТРОЕННОГО НЕТ ═══
+        // Умеет браузер - берём встроенное: оно работает в одном контуре с эхо и АРУ,
+        // стоит дешевле и не греет телефон. Кнопка «подавить шум» рядом с уже работающим
+        // подавлением была бы предложением обработать сигнал дважды.
+        var noNS = canDo('noiseSuppression') === false;
+        var rnnBtn = $('rnn');
+        if (noNS && rnnBtn) {
+          rnnBtn.style.display = '';
+          rnnBtn.onclick = function () { rnnToggle(rnnBtn); };
+          // ЧЕСТНЫЙ СОВЕТ, А НЕ ТОЛЬКО КНОПКА (требование Ren): у нашего шумодава своя
+          // цена, а браузер ту же работу делает лучше и даром. Человек вправе выбрать.
+          box.textContent += ' · встроенного подавления тут нет: включи «Подавить шум»'
+            + ' либо открой комнату в обычном браузере - там оно есть и работает лучше';
+        }
       } catch (e) { box.textContent = 'настройки звука не спросить: ' + e; }
     }
 
     setTimeout(audioFacts, 800);
+
+    // ═══════════ СВОЙ ШУМОДАВ (RNNoise), И ТОЛЬКО ТАМ, ГДЕ ВСТРОЕННОГО НЕТ ═══════════
+    // РАЗНИЦА МЕЖДУ КЛИЕНТАМИ ПОДТВЕРЖДЕНА ФАКТОМ (Ren 25.08, один код, два клиента):
+    //   Mac Telegram (WebView): шумодав НЕ УМЕЕТ · 96000 Гц - обработки нет вовсе;
+    //   обычный браузер:        шумодав вкл · эхо вкл · громкость вкл · 48000 Гц.
+    // Значит наши флаги верные, а десктопный Telegram их не принимает. Отсюда правило:
+    // БРАУЗЕР УМЕЕТ - БЕРЁМ ВСТРОЕННОЕ (оно дешевле и лучше: работает вместе с эхо- и
+    // АРУ-контурами), НЕ УМЕЕТ - включаем свой. Ставить RNNoise поверх рабочего
+    // встроенного значило бы дважды обрабатывать один сигнал и греть телефон впустую.
+    //
+    // ПО КНОПКЕ, А НЕ ВСЕГДА (условие Ren): на слабых телефонах цена заметна, и решать
+    // это за человека мы не будем. Отсюда же ГРАНИЦА ПОСЛЕДСТВИЙ: путь по умолчанию не
+    // трогается вовсе, и поломка здесь может задеть только того, кто нажал.
+    //
+    // FAIL-OPEN НА КАЖДОМ ШАГЕ: не тот sampleRate, нет wasm, не собрался worklet, отказал
+    // setProcessor - остаёмся на ИСХОДНОЙ дорожке и говорим причину. Тишина в эфире хуже
+    // шума: шум мешает, а тишину человек читает как «меня не слышно вовсе».
+    var RNN_ON = false;
+
+    // WASM ЗАГРУЖАЕТСЯ ГЛАВНЫМ ПОТОКОМ И ЕДЕТ В WORKLET БАЙТАМИ: в AudioWorklet нет ни
+    // fetch, ни importScripts - оттуда его не достать никак.
+    async function rnnBytes() {
+      var r = await fetch(new URL('rnnoise.wasm', location.href).href, { cache: 'force-cache' });
+      if (!r.ok) throw new Error('rnnoise.wasm: HTTP ' + r.status);
+      return await r.arrayBuffer();
+    }
+
+    // КОД ОБРАБОТЧИКА ЖИВЁТ СТРОКОЙ И ГРУЗИТСЯ ЧЕРЕЗ Blob: отдельный файл пришлось бы
+    // выкладывать третьим артефактом и держать в согласии со страницей - лишний способ
+    // разъехаться (класс «страница и Worker выкладываются разными командами»).
+    var RNN_WORKLET = `
+class RnnProc extends AudioWorkletProcessor {
+  constructor(opts) {
+    super();
+    this.N = 480;              // RNNoise работает кадрами по 480 сэмплов при 48 кГц
+    this.inBuf = new Float32Array(0);
+    this.outBuf = new Float32Array(0);
+    this.ready = false;
+    this.bypass = false;
+    const bytes = opts.processorOptions.wasm;
+    // ДВА ИМПОРТА, И ВТОРОЙ - НАСТОЯЩИЙ memcpy. Заглушка-пустышка «работала» и давала
+    // правдоподобные числа на проверке в node: копирования не было, а вывод выглядел
+    // верным. Проба, не воспроизводящая контракт, врёт убедительнее отсутствующей.
+    WebAssembly.instantiate(bytes, { a: {
+      a: () => 0,
+      b: (dst, src, n) => {
+        new Uint8Array(this.mem.buffer).copyWithin(dst, src, src + n);
+        return dst;
+      },
+    } }).then((res) => {
+      const e = res.instance.exports;
+      this.e = e; this.mem = e.c;
+      if (e.d) e.d();
+      this.st = e.f();          // rnnoise_create
+      this.ptr = e.g(this.N * 4);
+      this.ready = true;
+      this.port.postMessage({ ready: true });
+    }).catch((err) => {
+      // НЕ СОБРАЛОСЬ - ПРОПУСКАЕМ ЗВУК КАК ЕСТЬ И ГОВОРИМ ОБ ЭТОМ. Молчащий процессор
+      // означал бы тишину в комнате, а это хуже любого шума.
+      this.bypass = true;
+      this.port.postMessage({ error: String(err && err.message || err) });
+    });
+  }
+  process(inputs, outputs) {
+    const inp = inputs[0], out = outputs[0];
+    if (!inp || !inp[0] || !out || !out[0]) return true;
+    const src = inp[0], dst = out[0];
+    if (this.bypass || !this.ready) { dst.set(src); return true; }
+    // КВАНТ WEBAUDIO - 128 СЭМПЛОВ, КАДР RNNOISE - 480: без буфера они не сходятся ни
+    // при каком раскладе, и «почти работает» тут означает треск.
+    const merged = new Float32Array(this.inBuf.length + src.length);
+    merged.set(this.inBuf); merged.set(src, this.inBuf.length);
+    this.inBuf = merged;
+    while (this.inBuf.length >= this.N) {
+      const frame = this.inBuf.subarray(0, this.N);
+      const h = new Float32Array(this.mem.buffer, this.ptr, this.N);
+      // RNNoise ЖДЁТ МАСШТАБ int16, А WEBAUDIO ДАЁТ [-1,1]. Без множителя модель видит
+      // сигнал в 32 тысячи раз тише и считает его тишиной - то есть глушит всё.
+      for (let i = 0; i < this.N; i++) h[i] = frame[i] * 32768;
+      this.e.j(this.st, this.ptr, this.ptr);
+      const o = new Float32Array(this.mem.buffer, this.ptr, this.N);
+      const chunk = new Float32Array(this.N);
+      for (let i = 0; i < this.N; i++) chunk[i] = o[i] / 32768;
+      const grown = new Float32Array(this.outBuf.length + this.N);
+      grown.set(this.outBuf); grown.set(chunk, this.outBuf.length);
+      this.outBuf = grown;
+      this.inBuf = this.inBuf.subarray(this.N);
+    }
+    if (this.outBuf.length >= dst.length) {
+      dst.set(this.outBuf.subarray(0, dst.length));
+      this.outBuf = this.outBuf.subarray(dst.length);
+    } else {
+      // ПЕРВЫЕ КВАНТЫ ВЫХОДА ЕЩЁ НЕТ - ОТДАЁМ ТИШИНУ, А НЕ СЫРОЙ ВХОД: подмешать
+      // необработанный кусок значит вернуть тот самый шум ровно на старте.
+      dst.fill(0);
+    }
+    return true;
+  }
+}
+registerProcessor('rnn-denoise', RnnProc);
+`;
+
+    // ПРОЦЕССОР В ФОРМЕ, КОТОРУЮ ЖДЁТ LIVEKIT: init/processedTrack/destroy.
+    function rnnProcessor(bytes) {
+      var node = null, ctx = null, srcNode = null, dstNode = null;
+      return {
+        name: 'rnnoise',
+        async init(opts) {
+          ctx = opts.audioContext;
+          // 48 кГц - УСЛОВИЕ РАБОТЫ МОДЕЛИ, А НЕ ПОЖЕЛАНИЕ: она обучена на кадрах 480
+          // сэмплов при 48 кГц. На другой частоте это не «чуть хуже», а другой звук.
+          if (ctx.sampleRate !== 48000) {
+            throw new Error('нужен 48 кГц, а контекст на ' + ctx.sampleRate);
+          }
+          var url = URL.createObjectURL(new Blob([RNN_WORKLET], { type: 'text/javascript' }));
+          try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
+          node = new AudioWorkletNode(ctx, 'rnn-denoise', {
+            numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
+            processorOptions: { wasm: bytes },
+          });
+          node.port.onmessage = function (ev) {
+            if (ev.data && ev.data.error) say('Шумодав не собрался: ' + ev.data.error
+                                              + ' - звук идёт как был.', true);
+          };
+          srcNode = ctx.createMediaStreamSource(new MediaStream([opts.track]));
+          dstNode = ctx.createMediaStreamDestination();
+          srcNode.connect(node); node.connect(dstNode);
+          this.processedTrack = dstNode.stream.getAudioTracks()[0];
+        },
+        async restart(opts) { await this.destroy(); await this.init(opts); },
+        async destroy() {
+          try { srcNode && srcNode.disconnect(); } catch (e) {}
+          try { node && node.disconnect(); } catch (e) {}
+          node = srcNode = dstNode = null;
+        },
+      };
+    }
+
+    async function rnnToggle(btn) {
+      var pub = null;
+      room.localParticipant.trackPublications.forEach(function (p) {
+        if (String(p.source || '') === 'microphone' && p.track) pub = p;
+      });
+      if (!pub || !pub.track.setProcessor) {
+        say('Этот клиент не умеет подключать шумодав к дорожке.', true); return;
+      }
+      btn.disabled = true;
+      try {
+        if (RNN_ON) {
+          await pub.track.stopProcessor();
+          RNN_ON = false;
+          say('Шумодав выключен.');
+        } else {
+          say('Включаю шумодав, это пара секунд…');
+          await pub.track.setProcessor(rnnProcessor(await rnnBytes()));
+          RNN_ON = true;
+          say('Шумодав включён. Если станет глухо - выключи той же кнопкой.');
+        }
+      } catch (e) {
+        // ОСТАЁМСЯ НА ИСХОДНОЙ ДОРОЖКЕ: шум мешает, тишина означает «меня нет».
+        RNN_ON = false;
+        say('Шумодав не включился: ' + (e && e.message || e) + ' - звук идёт как был.', true);
+      }
+      btn.classList.toggle('on', RNN_ON);
+      btn.textContent = RNN_ON ? '🔊 Выключить шумодав' : '🔇 Подавить шум';
+      btn.disabled = false;
+    }
 
     // ═══ ПОКАЗ ЭКРАНА: КНОПКА ПО НАЛИЧИЮ МЕТОДА, А НЕ ПО ПЛАТФОРМЕ ═══
     // Живая проба (Ren 24.08): desktop отдаёт поток 2880x1448@30 со звуком вкладки,
