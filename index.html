@@ -95,7 +95,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'c69a3ad77b81';
+  var VERSION = '48dd01e070f5';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -631,16 +631,52 @@ registerProcessor('rnn-denoise', RnnProc);
 
     // ПРОЦЕССОР В ФОРМЕ, КОТОРУЮ ЖДЁТ LIVEKIT: init/processedTrack/destroy.
     function rnnProcessor(bytes) {
-      var node = null, ctx = null, srcNode = null, dstNode = null;
+      var node = null, ctx = null, srcNode = null, dstNode = null, ownCtx = null;
       return {
         name: 'rnnoise',
         async init(opts) {
-          ctx = opts.audioContext;
-          // 48 кГц - УСЛОВИЕ РАБОТЫ МОДЕЛИ, А НЕ ПОЖЕЛАНИЕ: она обучена на кадрах 480
-          // сэмплов при 48 кГц. На другой частоте это не «чуть хуже», а другой звук.
-          if (ctx.sampleRate !== 48000) {
-            throw new Error('нужен 48 кГц, а контекст на ' + ctx.sampleRate);
+          // ═══ 48 кГц ДЕЛАЕМ САМИ, А НЕ ТРЕБУЕМ ОТ ЧУЖОГО КОНТЕКСТА ═══
+          // ЖИВОЙ ОТКАЗ REN 26.08: «нужен 48 кГц, а контекст на 96000 - звук идёт как
+          // был». Десктопный Telegram отдаёт контекст на 96 кГц, и на Маке подавления не
+          // было НИ ОДНИМ способом: встроенного там нет вовсе, а наш отказывался.
+          // 48 кГц - УСЛОВИЕ РАБОТЫ МОДЕЛИ, а не пожелание: она обучена на кадрах 480
+          // сэмплов при 48 кГц, и на другой частоте это не «чуть хуже», а другой звук.
+          // РЕСЕМПЛИТ БРАУЗЕР, А НЕ МЫ: `createMediaStreamSource` на контексте с ДРУГОЙ
+          // частотой пересчитывает поток сам, штатно и без нашего кода. Писать ресемплер
+          // в worklet значило бы завести свою копию того, что платформа уже делает.
+          // ПОРЯДОК ЗНАЧИМ: СПЕРВА ЧУЖОЙ, ЕСЛИ ОН УЖЕ ГОДЕН. На клиентах, где контекст
+          // LiveKit и так 48 кГц (обычный браузер), поведение остаётся ПРЕЖНИМ бит-в-бит, и
+          // второго звукового контекста мы не заводим вовсе - лишний контекст это лишний
+          // ресемплер, лишняя память и лишний способ сломаться там, где всё работало.
+          ctx = null;
+          if (opts.audioContext && opts.audioContext.sampleRate === 48000) {
+            ctx = opts.audioContext;
           }
+          if (!ctx) {
+            try {
+              var _own = new (window.AudioContext || window.webkitAudioContext)(
+                { sampleRate: 48000 });
+              // ПРОВЕРЯЕМ ФАКТ, А НЕ ПРОСЬБУ: часть браузеров молча отдаёт контекст на
+              // своей частоте, проигнорировав аргумент, - и тогда мы получили бы ту же
+              // поломку, только без сообщения.
+              if (_own.sampleRate === 48000) { ctx = _own; ownCtx = _own; }
+              else { try { _own.close(); } catch (e) {} }
+            } catch (e) {
+              // Браузер отказал в частоте - скажем об этом ниже, честной строкой.
+            }
+          }
+          if (!ctx || ctx.sampleRate !== 48000) {
+            // ОТКАЗ НАЗЫВАЕТ ЧАСТОТУ, КОТОРАЯ У ЧЕЛОВЕКА ЕСТЬ, а не наш внутренний null:
+            // «нужен 48, а у тебя 96» - это факт, с которым можно что-то делать, «получилось
+            // null» - наша кухня.
+            var _have = (ctx && ctx.sampleRate)
+              || (opts.audioContext && opts.audioContext.sampleRate) || '?';
+            throw new Error('нужен 48 кГц, а тут ' + _have
+                            + ' - браузер не дал пересчитать');
+          }
+          // СВОЙ КОНТЕКСТ НАДО РАЗБУДИТЬ: созданный до жеста человека он стоит suspended, и
+          // дорожка молчала бы при полностью исправной цепочке.
+          if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
           var url = URL.createObjectURL(new Blob([RNN_WORKLET], { type: 'text/javascript' }));
           try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
           node = new AudioWorkletNode(ctx, 'rnn-denoise', {
@@ -660,7 +696,10 @@ registerProcessor('rnn-denoise', RnnProc);
         async destroy() {
           try { srcNode && srcNode.disconnect(); } catch (e) {}
           try { node && node.disconnect(); } catch (e) {}
-          node = srcNode = dstNode = null;
+          // СВОЙ КОНТЕКСТ ЗАКРЫВАЕМ, ЧУЖОЙ - НИКОГДА: контекст LiveKit держит весь звук
+          // комнаты, и закрыв его, мы оглушили бы человека целиком.
+          if (ownCtx) { try { ownCtx.close(); } catch (e) {} }
+          node = srcNode = dstNode = ownCtx = ctx = null;
         },
       };
     }
