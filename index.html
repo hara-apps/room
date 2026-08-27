@@ -214,7 +214,10 @@
   <button id="chart" class="wide">📈 График и доска</button>
   <button id="amabtn" class="wide">🙋 Очередь вопросов</button>
   <button id="pollbtn" class="wide">🗳 Голосование</button>
-  <button id="subbtn" class="wide" style="display:none">📝 Субтитры</button>
+  <button id="subbtn" class="wide" style="display:none">📝 Включить распознавание</button>
+  <!-- ПОКАЗ ЛЕНТЫ - ЛИЧНОЕ ДЕЛО, И КНОПКА ЕСТЬ У ВСЕХ, включая веб-гостя: он ленту ВИДИТ
+       (она едет каналом данных), значит и прятать её вправе. -->
+  <button id="subshow" class="wide" style="display:none">🙈 Скрыть ленту у себя</button>
   <p class="me" id="subwhy"></p>
   <div id="tmrset" style="display:none"></div>
   <button id="show" class="wide" style="display:none"></button>
@@ -226,7 +229,7 @@
        исчезает вместе с ней: регулятор того, чего не играет, читается как «сломано». -->
   <div id="djvol" style="display:none">
     <label class="me" for="djv" id="djvlab"></label>
-    <input id="djv" type="range" min="0" max="100" step="5">
+    <input id="djv" type="range" min="0" max="28" step="1">
   </div>
   <p class="me" id="showhint"></p>
   <!-- ПРИЧИНА, ПО КОТОРОЙ КНОПКИ НЕТ, ЖИВЁТ РЯДОМ С МЕСТОМ, ГДЕ ЕЁ ЖДУТ. Общая
@@ -264,7 +267,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'd6d1871fe877';
+  var VERSION = 'b0900d0194f1';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -424,6 +427,10 @@
       return n;
   }
 
+  //: ВЫКЛЮЧИТЬ РАДИО. Провязывается там, где есть `ask`; до этого честно говорит, что
+  //: не может, - а не молчит (молчание после тапа читается как «сломалось»).
+  var djOff = null;
+
   function dropDj() {
       // ВЫКЛЮЧЕНИЕ РАДИО - СОСТОЯНИЕ КОМНАТЫ, А НЕ СОБЫТИЕ ПОДПИСКИ. `TrackUnsubscribed`
       // может не прийти вовсе (процесс убит, соединение оборвалось), а признак `dj` в
@@ -438,16 +445,32 @@
       try { djTrack.setVolume(djVol / 100); return true; } catch (e) { return false; }
   }
 
+  // ═══ ШКАЛА ГРОМКОСТИ: УХО СЛЫШИТ ЛОГАРИФМИЧЕСКИ, ПОЛЗУНОК ОБЯЗАН ТОЖЕ ═══
+  // ЖИВОЙ ОТЗЫВ REN: «прыгает через 5%: 0 -> 5 -> 10, а фоном под разговор нужно 1-3%».
+  // Ровный шаг в 5% одинаково бесполезен на обоих концах: внизу он перескакивает ВСЁ
+  // полезное, вверху 60% против 65% ухо почти не различает. Поэтому ПОЗИЦИЯ ползунка и
+  // ГРОМКОСТЬ - разные величины: 28 делений, первые десять идут ПО ОДНОМУ проценту.
+  //: позиция 0..9 -> 0..9%, дальше по 5%: 10->10%, 11->15%, ... 28->100%.
+  function volOfPos(pos) {
+    pos = Math.max(0, Math.min(28, parseInt(pos, 10) || 0));
+    return pos <= 9 ? pos : Math.min(100, 10 + (pos - 10) * 5);
+  }
+
+  function posOfVol(vol) {
+    vol = Math.max(0, Math.min(100, parseInt(vol, 10) || 0));
+    return vol <= 9 ? vol : Math.min(28, 10 + Math.round((vol - 10) / 5));
+  }
+
   function showDjVol(on) {
       var box = $('djvol');
       if (!box) return;
       box.style.display = on ? '' : 'none';
       if (!on) return;
       var sl = $('djv');
-      sl.value = String(djVol);
+      sl.value = String(posOfVol(djVol));
       $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
       sl.oninput = function () {
-          djVol = parseInt(sl.value, 10) || 0;
+          djVol = volOfPos(sl.value);
           $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
           // ПРИМЕНЯЕМ СРАЗУ, А НЕ ПО ОТПУСКАНИЮ: человек ведёт ползунок и слушает, что
           // получается, - иначе он подбирает значение вслепую.
@@ -457,10 +480,33 @@
   }
 
 
+  // ═══ ДВЕ РАЗНЫЕ ВЕЩИ, И ДО ЭТОЙ ПРАВКИ ОНИ БЫЛИ ОДНОЙ КНОПКОЙ ═══
+  // РАСПОЗНАВАНИЕ - общее на комнату, идёт на сервере и СТОИТ ДЕНЕГ: включил один, платят
+  // все. ПОКАЗ ЛЕНТЫ - личное дело каждого: кому-то текст мешает, кто-то пришёл слушать.
+  // Склеенные в одну кнопку, они означали, что человек не может убрать ленту у себя, не
+  // выключив распознавание ВСЕЙ комнате.
+  var subShow = true;
+  try {
+    var _ss = localStorage.getItem('rtc_sub_show');
+    if (_ss === '0') subShow = false;         // выбор переживает переоткрытие комнаты
+  } catch (e) {}
+
+  function subBoxPaint() {
+    // ЛЕНТА ВИДНА, КОГДА ЕСТЬ ЧТО ПОКАЗЫВАТЬ И ЧЕЛОВЕК ЭТОГО ХОЧЕТ. Два условия, и оба
+    // обязательны: распознавание выключено - показывать нечего; скрыл сам - не навязываем.
+    $('subbox').style.display = (subOn && subShow) ? '' : 'none';
+    var b = $('subshow');
+    if (b) {
+      b.style.display = subOn ? '' : 'none';
+      b.classList.toggle('on', subShow);
+      b.textContent = subShow ? '🙈 Скрыть ленту у себя' : '👁 Показать ленту';
+    }
+  }
+
   function subNote(txt, sticky) {
-    $('subbox').style.display = '';
     $('subnote').textContent = txt || '';
     subSticky = !!sticky && !!txt;
+    subBoxPaint();
   }
 
   // СОСТОЯНИЕ ЗАПИСИ ЧИТАЕТСЯ У КОМНАТЫ, А НЕ ХРАНИТСЯ У НАС. Свой флажок разошёлся бы с
@@ -494,12 +540,20 @@
     // ОДИН РАЗ на всех, кто их видит: включил один - идут у всех, и вошедший позже
     // обязан это увидеть (рассылка по каналу данных до него не дошла бы).
     subOn = !!(m && m.subs);
+    var _subBy = (m && typeof m.subs === 'string' && m.subs !== '1') ? m.subs : '';
     var sb = $('subbtn');
     if (sb.style.display !== 'none') {
       sb.classList.toggle('on', subOn);
-      sb.textContent = subOn ? '⏹ Выключить субтитры' : '📝 Субтитры';
+      sb.textContent = subOn ? '⏹ Выключить распознавание' : '📝 Включить распознавание';
     }
-    $('subbox').style.display = subOn ? '' : 'none';
+    // ЧЕСТНО ПРО ДЕНЬГИ И ПРО ГРАНИЦУ, А НЕ МОЛЧА. Человек должен понимать, что он
+    // включает общее и платное, а прячет - своё и бесплатное.
+    $('subwhy').textContent = subOn
+      ? ('Распознавание включено' + (_subBy ? ' (' + _subBy + ')' : '')
+         + ' - платит комната. Показ ленты каждый настраивает себе.')
+      : (initData ? 'Распознавание выключено. Включит любой - платит комната.'
+                  : 'Распознавание включает тот, кто вошёл из Telegram.');
+    subBoxPaint();
     if (subOn && !$('subs').children.length && !subSticky) {
       subNote('Слушаю. Реплики появятся здесь: серым - пока распознаётся, '
         + 'обычным - готовое.', false);
@@ -588,9 +642,9 @@
       off.textContent = '⏹ Отсоединить радио';
       off.onclick = function () {
         pactFor = ''; draw();
-        var b = $('dj');
-        if (b && b.onclick) b.onclick();
-        else say('Выключить радио отсюда не вышло - жми кнопку «Выключить радио».', true);
+        if (djOff) djOff();
+        else say('Отсоединить радио может тот, кто вошёл из Telegram: у меня нет канала '
+                 + 'к боту.', true);
       };
       box.appendChild(off);
       var nt = document.createElement('p');
@@ -732,25 +786,40 @@
   // написано на кнопке у соседа (закон №40).
   var SOUNDS = {
     clap: { e: '👏', t: 'Хлопки', p: function (ac, t) {
-      // ═══ ПОЧЕМУ ПРЕЖНИЙ ЗВУЧАЛ КАК ПИСК (живой отзыв Ren) ═══
-      // `bandpass` c Q=1.2 на 35-миллисекундном шуме - это РЕЗОНАТОР: фильтр звенит на
-      // своей частоте, и ухо слышит не удар, а короткий тон. Настоящий хлопок
-      // ШИРОКОПОЛОСНЫЙ (от пары сотен герц до восьми килогерц) и гаснет за 30-60 мс.
-      // Поэтому здесь `highpass` без добротности: он режет гул, но НЕ звенит.
-      for (var i = 0; i < 34; i++) {
-        burst(ac, t + Math.pow(Math.random(), 0.55) * 1.25, 0.03 + Math.random() * 0.035,
-              0.30 + Math.random() * 0.25, 'highpass', 320 + Math.random() * 380, 0);
+      // ═══ ВТОРОЙ ЗАХОД, И ОБА ПРЕЖНИХ ПРОМАХА НАЗВАНЫ ═══
+      // (1) `bandpass` c Q=1.2 на коротком шуме - РЕЗОНАТОР: звенит на своей частоте, ухо
+      // слышит тон, а не удар. (2) `highpass` на 320-700 Гц оставил ВЕСЬ низ, и вышло
+      // «низко, на хлопки не похоже» (живой отзыв Ren).
+      // ХЛОПОК ЖИВЁТ ВЫШЕ, ЧЕМ КАЖЕТСЯ: основная энергия ладоней - 1.5-4 кГц, а спад
+      // 8-15 мс, не 35. Отсюда: срез снизу от 1.2 кГц, ОЧЕНЬ короткий удар и лёгкий
+      // «хвост зала» после каждого - без него это щелчки мыши, а не аплодисменты.
+      for (var i = 0; i < 28; i++) {
+        // РАЗБРОС НЕРОВНЫЙ: в начале плотно, дальше реже - так хлопает зал, а ровная
+        // сетка читается как метроном.
+        var at = t + Math.pow(Math.random(), 0.5) * 1.15;
+        burst(ac, at, 0.010 + Math.random() * 0.008, 0.55 + Math.random() * 0.35,
+              'highpass', 1200 + Math.random() * 900, 0);
+        burst(ac, at + 0.006, 0.045, 0.10 + Math.random() * 0.06, 'bandpass', 2400, 0.7);
       }
     } },
     drum: { e: '🥁', t: 'Дробь', p: function (ac, t) {
-      var at = t, step = 0.085;
-      while (at < t + 1.25) {
-        burst(ac, at, 0.05, 0.16, 'lowpass', 260, 0);
-        step = Math.max(0.028, step * 0.93);          // дробь РАЗГОНЯЕТСЯ, иначе это метроном
-        at += step;
+      // ═══ ПОЧЕМУ ПРЕЖНЯЯ БЫЛА «НЕ ПОХОЖА» ═══
+      // `lowpass 260` на 50 мс - это глухой бубух, и двадцать таких подряд сливаются в
+      // РОВНЫЙ ГУЛ. Барабанная дробь - это СУХИЕ короткие удары по пластику: середина и
+      // верх (600 Гц - 5 кГц), длительность 8-14 мс, и они обязаны РАЗЛИЧАТЬСЯ поштучно.
+      // Плюс дробь идёт ПАРАМИ (правая-левая) с лёгкой неровностью - ровная сетка звучит
+      // машинно.
+      var at = t, step = 0.075;
+      while (at < t + 1.15) {
+        burst(ac, at, 0.008 + Math.random() * 0.005, 0.34 + Math.random() * 0.16,
+              'highpass', 700, 0);
+        step = Math.max(0.022, step * 0.94);      // РАЗГОН: без него это метроном
+        at += step * (0.9 + Math.random() * 0.2);
       }
-      burst(ac, at + 0.05, 0.22, 0.34, 'lowpass', 220, 0);
-      tone(ac, at + 0.05, 0.25, 0.22, 180, 60, 'sine');
+      // ФИНАЛЬНЫЙ УДАР - ДРУГОЙ ПО ТЕМБРУ, иначе конец не читается как конец.
+      burst(ac, at + 0.06, 0.09, 0.60, 'highpass', 400, 0);
+      tone(ac, at + 0.06, 0.30, 0.30, 190, 70, 'sine');
+      burst(ac, at + 0.06, 0.45, 0.22, 'highpass', 5500, 0);   // тарелка
     } },
     tyn: { e: '🥁', t: 'Тынц', p: function (ac, t) {
       tone(ac, t, 0.18, 0.30, 220, 90, 'sine');              // ба-
@@ -1722,8 +1791,12 @@ registerProcessor('rnn-denoise', RnnProc);
       // целиком - вместе с чужим графиком стёрлись бы все чужие штрихи.
       var keep = $('draw');
       [].slice.call(box.children).forEach(function (c) { if (c !== keep) box.removeChild(c); });
+      paintSymBtns();
       if (!chSym) {
-        $('chartwho').textContent = 'Выбери пару - график увидят все, кто в комнате.';
+        // ДОСКА ОСТАЁТСЯ - ОНА ПОЛЕЗНА И САМА ПО СЕБЕ. Убрали график, чтобы чертить схему
+        // на чистом поле, а не чтобы закрыть панель.
+        $('chartwho').textContent = 'Графика нет - чистая доска. Выбери пару, если нужен '
+          + 'график: его увидят все, кто в комнате.';
         return;
       }
       var host = document.createElement('div');
@@ -1744,6 +1817,19 @@ registerProcessor('rnn-denoise', RnnProc);
     }
 
     function chartSet(sym, tf, by, mine) {
+      // ═══ ПУСТАЯ ПАРА - ЭТО «УБРАТЬ ГРАФИК», А НЕ ПРОМАХ ═══
+      // Доска полезна и БЕЗ графика (схему чертят на чистом поле), а обратного пути у
+      // выбора пары не было вовсе: выбрал BTC - и живи с ним. Это четвёртая фича подряд,
+      // которую можно включить и нельзя выключить, - см. правило про обратный путь.
+      if (sym === null) {
+        chSym = ''; chBy = by || '';
+        chartPaint();
+        if (mine) {
+          stopBeat('chart');
+          send({ t: 'chart', sym: '', tf: chTf, by: myLabel() });
+        }
+        return;
+      }
       var s2 = symOk(sym), t2 = tfOk(tf) || chTf;
       if (sym && !s2) {
         // ОТБРОШЕННОЕ НАЗЫВАЕТСЯ. Молча проигнорировать чужой символ значит оставить
@@ -1763,8 +1849,10 @@ registerProcessor('rnn-denoise', RnnProc);
 
     function paintSymBtns() {
       [].slice.call($('syms').children).forEach(function (b) {
-        b.classList.toggle('on', b.dataset.sym === chSym);
+        b.classList.toggle('on', !!b.dataset.sym && b.dataset.sym === chSym);
       });
+      var off = $('symoff');
+      if (off) off.style.display = chSym ? '' : 'none';
       [].slice.call($('tfs').children).forEach(function (b) {
         b.classList.toggle('on', b.dataset.tf === chTf);
       });
@@ -1773,7 +1861,12 @@ registerProcessor('rnn-denoise', RnnProc);
     SYMS.forEach(function (p) {
       var b = document.createElement('button');
       b.className = 'chip'; b.textContent = p[0]; b.dataset.sym = p[1];
-      b.onclick = function () { chartSet(p[1], chTf, 'Ты', true); };
+      // ПОВТОРНЫЙ ТАП ПО ВЫБРАННОЙ ПАРЕ СНИМАЕТ ЕЁ: у выбора обязан быть обратный ход,
+      // и он должен лежать там же, где прямой, - иначе его ищут и не находят.
+      b.onclick = function () {
+        if (chSym === p[1]) chartSet(null, chTf, 'Ты', true);
+        else chartSet(p[1], chTf, 'Ты', true);
+      };
       $('syms').appendChild(b);
     });
     var bOther = document.createElement('button');
@@ -1784,6 +1877,14 @@ registerProcessor('rnn-denoise', RnnProc);
       if (v.trim()) chartSet(v.trim(), chTf, 'Ты', true);
     };
     $('syms').appendChild(bOther);
+    // ЯВНАЯ КНОПКА РЯДОМ С НЕЯВНЫМ ПОВТОРНЫМ ТАПОМ. Повторный тап - для тех, кто его
+    // угадает; кнопка - для всех остальных. Показывается ТОЛЬКО когда есть что убирать:
+    // «убрать график» на пустой доске отвечает не на тот вопрос.
+    var bOff = document.createElement('button');
+    bOff.className = 'chip'; bOff.id = 'symoff'; bOff.textContent = '✖️ Убрать график';
+    bOff.style.display = 'none';
+    bOff.onclick = function () { chartSet(null, chTf, 'Ты', true); };
+    $('syms').appendChild(bOff);
     TFS.forEach(function (p) {
       var b = document.createElement('button');
       b.className = 'chip'; b.textContent = p[0]; b.dataset.tf = p[1];
@@ -2307,20 +2408,31 @@ registerProcessor('rnn-denoise', RnnProc);
     // ВЕБ-ГОСТЮ КНОПКИ НЕТ: ящик принимает только подпись Telegram, и немая кнопка хуже
     // отсутствующей. Ленту он при этом ВИДИТ - она едет каналом данных, который у него
     // есть, и лишать его текста было бы наказанием без причины.
+    // ПОКАЗ ЛЕНТЫ - У ВСЕХ И БЕЗ БОТА: это чисто местная настройка, ящик тут не при чём.
+    $('subshow').onclick = function () {
+      subShow = !subShow;
+      try { localStorage.setItem('rtc_sub_show', subShow ? '1' : '0'); } catch (e) {}
+      subBoxPaint();
+      say(subShow ? 'Лента снова видна - только у тебя.'
+                  : 'Ленту убрал у себя. Распознавание идёт дальше: оно общее на комнату.');
+    };
     if (initData) {
       var subBtn = $('subbtn');
       subBtn.style.display = '';
       showRec();                   // подпись обязана отвечать состоянию комнаты, а не порядку строк
       subBtn.onclick = async function () {
         subBtn.disabled = true;
-        say(subOn ? 'Прошу бота выключить субтитры…' : 'Прошу бота включить субтитры…');
+        var _was = subOn;
+        say(_was ? 'Прошу бота выключить распознавание…'
+                 : 'Прошу бота включить распознавание…');
         await ask({ kind: 'rtcsub', room: ROOM });
         subBtn.disabled = false;
+        // ВЫКЛЮЧЕНИЕ ОБЩЕГО - С ОГЛАСКОЙ. Оно стоит денег и касается всех, поэтому
+        // комната узнаёт, КТО его снял: молча погасшая лента читается как поломка.
+        if (_was) send({ t: 'subnote', x: myLabel() + ' выключил распознавание.' });
       };
-    } else {
-      $('subwhy').textContent = 'Субтитры включает тот, кто вошёл из Telegram. Тебе они '
-        + 'будут видны, как только их включат.';
     }
+    showRec();                     // подпись про деньги и границу нужна и веб-гостю
 
     //: СКОЛЬКО РЕПЛИК ДЕРЖИМ. Разговор идёт часами, и держать его целиком в DOM незачем -
     //: на телефоне это заметно.
@@ -2333,7 +2445,9 @@ registerProcessor('rnn-denoise', RnnProc);
 
     function subLine(who, nm, txt, final) {
       var box = $('subs');
-      $('subbox').style.display = '';
+      // СКРЫЛ У СЕБЯ - ЗНАЧИТ СКРЫЛ. Реплики продолжают копиться (включит показ - увидит
+      // последние), но лента не выскакивает обратно от первой же фразы.
+      subBoxPaint();
       var row = subCur[who];
       if (!row || row.dataset.fin === '1') {
         row = document.createElement('div');
@@ -2461,14 +2575,23 @@ registerProcessor('rnn-denoise', RnnProc);
       var djBtn = $('dj');
       djBtn.style.display = '';
       showRec();
+      // ═══ ВЫКЛЮЧЕНИЕ РАДИО - ОДНА ДВЕРЬ НА ОБА ВХОДА ═══
+      // Кнопка «Выключить радио» и «⋯ -> Отсоединить» это ДВА ПРЕДСТАВЛЕНИЯ одного
+      // действия, а не два действия (закон №40). Прежде ⋯ дёргал `$('dj').onclick()` -
+      // то есть зависел от того, что кнопка существует, видна и уже провязана; у
+      // веб-гостя её нет вовсе, а у остальных порядок строк решал, сработает ли.
+      djOff = async function () {
+        djBtn.disabled = true;
+        say('Выключаю радио…');
+        await ask({ kind: 'rtcdj', room: ROOM });
+        djBtn.disabled = false;
+        // ЗВУК СНИМАЕМ САМИ, НЕ ДОЖИДАЯСЬ ПРИЗНАКА КОМНАТЫ. Признак придёт и снимет его
+        // же (`dropDj` идемпотентен), но именно у НАЖАВШЕГО событие может опоздать или не
+        // прийти - на этом мы уже обожглись трижды.
+        dropDj();
+      };
       djBtn.onclick = async function () {
-        if (djOn) {
-          djBtn.disabled = true;
-          say('Выключаю радио…');
-          await ask({ kind: 'rtcdj', room: ROOM });
-          djBtn.disabled = false;
-          return;
-        }
+        if (djOn) { await djOff(); return; }
         // НЕ СПРАШИВАЕМ БУКВЫ ТАМ, ГДЕ ЕСТЬ СПИСОК. Ввод названия руками был работой,
         // переложенной на человека: у нас есть готовый каталог со странами, жанрами,
         // обложками и его же избранным.
