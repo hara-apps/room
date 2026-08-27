@@ -87,6 +87,39 @@
           touch-action:none; pointer-events:none; }
   #draw.on { pointer-events:auto; }
   #chartwho { color:var(--mut); font-size:12px; margin:6px 0 0; }
+  /* ЛЕНТА СУБТИТРОВ. Прокручивается сама вниз и не растёт бесконечно: разговор идёт
+     часами, а держать его целиком в DOM незачем. */
+  #subs { max-height:34vh; overflow-y:auto; }
+  .sl { padding:4px 0; font-size:14px; line-height:1.35; }
+  .sl .who { font-weight:600; font-size:12px; }
+  /* ПАРТИАЛ ПРИГЛУШЁН, ФИНАЛ - ОСНОВНЫМ ЦВЕТОМ. Страница тёмная, поэтому «чёрным» здесь
+     означает «полным контрастом»: человек должен ВИДЕТЬ, что распознавание ещё идёт, а
+     не гадать, всё ли это, что он сказал. */
+  .sl.part { color:var(--mut); font-style:italic; }
+  .sl.fin { color:var(--fg); }
+  /* ПОЛЯ ВВОДА НОВЫХ КАРТОЧЕК. Свой класс, а не правило на `input` целиком: у радио
+     поле уже своё и выглядит как выглядит, а перекрасить чужой экран заодно с новым -
+     это правка, о которой никто не просил. */
+  input.tin { width:100%; padding:11px 12px; font-size:14px; border:0; border-radius:10px;
+              background:#25252e; color:var(--fg); margin:4px 0 6px; }
+  input.tin::placeholder { color:var(--mut); }
+  /* ОЧЕРЕДЬ ВОПРОСОВ. Номер слева - это ПОРЯДОК, в котором до них дойдут, поэтому он
+     считается по голосам, а не по времени прихода. */
+  #amalist { max-height:38vh; overflow-y:auto; }
+  .q { display:flex; align-items:flex-start; gap:8px; padding:7px 0; }
+  .q .qn { flex:0 0 auto; color:var(--mut); font-size:12px; min-width:16px; padding-top:3px; }
+  .q .qt { flex:1; font-size:14px; }
+  .q .qw { color:var(--mut); font-size:12px; }
+  .q.done .qt { color:var(--mut); text-decoration:line-through; }
+  .q button { flex:0 0 auto; width:auto; padding:5px 9px; margin:0; font-size:12px;
+              font-weight:600; background:#25252e; border-radius:999px; }
+  .q button.on { background:#3a7afe; }
+  /* ГОЛОСОВАНИЕ: РЯД КНОПОК И РЯД ПОЛОС. Полоса отвечает на вопрос «кого больше» быстрее
+     любого числа, но число рядом обязано быть - «примерно поровну» решения не принимает. */
+  #pollbtns { display:flex; flex-wrap:wrap; }
+  .bar { height:8px; border-radius:999px; background:#3a7afe; min-width:2px; margin:3px 0 6px; }
+  .bar.n { background:#ff5a5f; }
+  .bar.a { background:#3a3a44; }
   #pops { position:fixed; left:0; right:0; bottom:78px; padding:0 14px; display:flex;
           flex-direction:column; align-items:center; gap:4px; pointer-events:none; z-index:5; }
   .pop { background:rgba(30,30,38,.94); border-radius:999px; padding:5px 12px; font-size:14px;
@@ -105,6 +138,13 @@
 <div id="screens"></div>
 <p id="state"></p>
 
+<!-- СУБТИТРЫ ВЫШЕ КРИПТО-ПАНЕЛИ: их читают ПОКА ГОВОРЯТ, а график открывают раз за
+     созвон. Свёрнуты, пока не включены. -->
+<div class="card" id="subbox" style="display:none">
+  <div id="subs"></div>
+  <p class="me" id="subnote"></p>
+</div>
+
 <!-- КРИПТО-ПАНЕЛЬ. Свёрнута по умолчанию: график занимает пол-экрана, а комнату
      открывают ради разговора - разворачивает тот, кому он нужен. -->
 <div class="card" id="crypto" style="display:none">
@@ -114,6 +154,42 @@
   <div id="tfs"></div>
   <div id="tools2"></div>
   <p class="me" id="drawhint"></p>
+  <!-- ПОРТФЕЛЬ - ТОЛЬКО ПО ЯВНОМУ ТАПУ ЕГО ВЛАДЕЛЬЦА, И ДВЕ КНОПКИ ЗДЕСЬ НЕ ДЛЯ
+       УДОБСТВА: «доли» и «доли и суммы» это два РАЗНЫХ решения о том, что человек
+       показывает комнате, и выбирать за него нельзя. -->
+  <div id="portbtns" style="display:none">
+    <button id="portsh" class="pre">💼 Мой счёт: доли</button>
+    <button id="portusd" class="pre">💼 Мой счёт: доли и суммы</button>
+  </div>
+</div>
+
+<!-- ПОРТФЕЛЬ ДОКЛАДЧИКА. Появляется ТОЛЬКО после того, как человек сам его показал:
+     каталога «чьи счета в комнате» нет и быть не должно. -->
+<div class="card" id="port" style="display:none">
+  <div id="portbox"></div>
+  <p class="me" id="portnote"></p>
+</div>
+
+<!-- ГОЛОСОВАНИЕ КОМНАТЫ. Рядом с рынком Polymarket, когда он привязан: «рынок говорит
+     62%, комната говорит 40%» - это и есть тот ответ, ради которого голосуют. -->
+<div class="card" id="poll" style="display:none">
+  <p id="pollq"></p>
+  <p class="me" id="pollmkt"></p>
+  <div id="pollbtns"></div>
+  <div id="polltal"></div>
+  <input id="pq" class="tin" type="text" maxlength="140" autocomplete="off"
+         placeholder="Вопрос комнате (или ссылка на рынок Polymarket)">
+  <button id="pgo" class="wide">🗳 Спросить комнату</button>
+  <p class="me" id="pollnote"></p>
+</div>
+
+<!-- ОЧЕРЕДЬ ВОПРОСОВ (AMA). Порядок задают голоса, а не тот, кто громче. -->
+<div class="card" id="ama" style="display:none">
+  <div id="amalist"></div>
+  <input id="aq" class="tin" type="text" maxlength="200" autocomplete="off"
+         placeholder="Твой вопрос">
+  <button id="ago" class="wide">🙋 В очередь</button>
+  <p class="me" id="amanote"></p>
 </div>
 
 <!-- РЕАКЦИИ ВЫШЕ СЛУЖЕБНЫХ КНОПОК: по ним тапают посреди чужой реплики, не отводя
@@ -128,6 +204,10 @@
   <button id="hand" class="wide">✋ Поднять руку</button>
   <button id="tmr" class="wide">⏱ Таймер</button>
   <button id="chart" class="wide">📈 График и доска</button>
+  <button id="amabtn" class="wide">🙋 Очередь вопросов</button>
+  <button id="pollbtn" class="wide">🗳 Голосование</button>
+  <button id="subbtn" class="wide" style="display:none">📝 Субтитры</button>
+  <p class="me" id="subwhy"></p>
   <div id="tmrset" style="display:none"></div>
   <button id="show" class="wide" style="display:none"></button>
   <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
@@ -176,7 +256,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '7df91d0557b4';
+  var VERSION = '7e38396b73b3';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -255,7 +335,24 @@
   //: только показываем, если он о нём вообще сообщает.
   var AUDIO_MUST = ['noiseSuppression', 'echoCancellation', 'autoGainControl'];
 
-  var room = null, people = {}, micOn = true, recOn = false, djOn = false;
+  var room = null, people = {}, micOn = true, recOn = false, djOn = false,
+      subOn = false;
+  //: ЛИПКОЕ ИЗВЕСТИЕ О СУБТИТРАХ ЖИВЁТ РЯДОМ С `subOn`, А НЕ ВНУТРИ КОМНАТЫ. Его читает
+  //: `showRec`, который вызывается ДО подключения (метаданные приезжают вместе с входом),
+  //: и объявление внутри - это `ReferenceError` на КАЖДОМ входе в комнату с включёнными
+  //: субтитрами, уносящий всё, что регистрируется ниже. Поймано браузерной пробой:
+  //: чтением кода такое не видно - обе строки на месте и обе выглядят верно.
+  var subSticky = false;
+
+  //: ДВЕРЬ ОДНА НА ОБЕ СТРОКИ И ЖИВЁТ ЗДЕСЬ ЖЕ, А НЕ ВНУТРИ КОМНАТЫ: её зовёт и `showRec`
+  //: (до подключения), и лента субтитров (после). Объявление в комнате давало
+  //: `ReferenceError` у того, кто вошёл в комнату с УЖЕ включёнными субтитрами, - и
+  //: уносило всё, что регистрируется ниже, включая объяснение для веб-гостя.
+  function subNote(txt, sticky) {
+    $('subbox').style.display = '';
+    $('subnote').textContent = txt || '';
+    subSticky = !!sticky && !!txt;
+  }
 
   // СОСТОЯНИЕ ЗАПИСИ ЧИТАЕТСЯ У КОМНАТЫ, А НЕ ХРАНИТСЯ У НАС. Свой флажок разошёлся бы с
   // сервером на первом же падении Egress, и кнопка предлагала бы остановить то, что уже
@@ -284,6 +381,23 @@
     // РАДИО ЖИВЁТ В ТЕХ ЖЕ МЕТАДАННЫХ, И ЭТО НЕ ЭКОНОМИЯ ПОЛЯ. Признак «что играет»
     // обязан доезжать до вошедшего ПОЗЖЕ ровно так же, как признак записи: рассылка по
     // каналу данных молчала бы именно ему.
+    // СУБТИТРЫ - ПРИЗНАК КОМНАТЫ, А НЕ ЛИЧНАЯ НАСТРОЙКА. Они стоят денег и генерятся
+    // ОДИН РАЗ на всех, кто их видит: включил один - идут у всех, и вошедший позже
+    // обязан это увидеть (рассылка по каналу данных до него не дошла бы).
+    subOn = !!(m && m.subs);
+    var sb = $('subbtn');
+    if (sb.style.display !== 'none') {
+      sb.classList.toggle('on', subOn);
+      sb.textContent = subOn ? '⏹ Выключить субтитры' : '📝 Субтитры';
+    }
+    $('subbox').style.display = subOn ? '' : 'none';
+    if (subOn && !$('subs').children.length && !subSticky) {
+      subNote('Слушаю. Реплики появятся здесь: серым - пока распознаётся, '
+        + 'обычным - готовое.', false);
+    }
+    // ВЫКЛЮЧИЛИ СУБТИТРЫ - СНИМАЕМ И ЛИПКОЕ ИЗВЕСТИЕ: оно относилось к прошлому запуску,
+    // и «бюджет исчерпан» над выключённой лентой отвечает не на тот вопрос.
+    if (!subOn) subSticky = false;
     djOn = !!(m && m.dj);
     var d = $('dj');
     if (d.style.display !== 'none') {
@@ -1769,6 +1883,205 @@ registerProcessor('rnn-denoise', RnnProc);
       if (chOpen && !chSym) send({ t: 'ask' });
     };
 
+    // ═══ ОЧЕРЕДЬ ВОПРОСОВ И ГОЛОСОВАНИЕ: КАНАЛОМ ДАННЫХ, КАК РУКА И ТАЙМЕР ═══
+    // ВЕДУЩЕГО В КОМНАТЕ НЕТ, И ЗАВОДИТЬ ЕГО РАДИ ЭТИХ ДВУХ КАРТОЧЕК Я НЕ СТАЛ. Порядок
+    // вопросов задают ГОЛОСА, а не тот, кто громче; голосование открывает любой, и рядом
+    // написано, кто. Это та же граница, что у «заглушить всех»: просьба, а не приказ.
+    var ama = [];           // [{id, who, nm, x, v:{identity:1}, done:0, ts}]
+    var poll = null;        // {id, q, mkt, by, v:{identity:'y'|'n'|'a'}}
+    var AMA_MAX = 40;
+
+    function amaSort() {
+      // ГОЛОСА, ПОТОМ ВРЕМЯ. Отвеченные уходят вниз: очередь отвечает на вопрос «кто
+      // следующий», а не «что тут было».
+      ama.sort(function (a, b) {
+        if (!!a.done !== !!b.done) return a.done ? 1 : -1;
+        var d = Object.keys(b.v || {}).length - Object.keys(a.v || {}).length;
+        return d || (a.ts - b.ts);
+      });
+    }
+
+    function amaPaint() {
+      amaSort();
+      var box = $('amalist');
+      box.innerHTML = '';
+      var me = room.localParticipant.identity;
+      ama.forEach(function (q, i) {
+        var row = document.createElement('div');
+        row.className = 'q' + (q.done ? ' done' : '');
+        var n = document.createElement('div');
+        n.className = 'qn';
+        n.textContent = q.done ? '✓' : (i + 1) + '.';
+        var t = document.createElement('div');
+        t.className = 'qt';
+        t.textContent = q.x;
+        var w = document.createElement('div');
+        w.className = 'qw';
+        w.textContent = q.nm || '';
+        t.appendChild(document.createElement('br'));
+        t.appendChild(w);
+        var up = document.createElement('button');
+        var mine = !!(q.v || {})[me];
+        up.className = mine ? 'on' : '';
+        up.textContent = '👍 ' + Object.keys(q.v || {}).length;
+        up.onclick = function () { amaApply({ op: 'vote', id: q.id }, me, ''); send({ t: 'ama', op: 'vote', id: q.id }); };
+        row.appendChild(n); row.appendChild(t); row.appendChild(up);
+        // ОТМЕТИТЬ ОТВЕЧЕННЫМ МОЖЕТ ЛЮБОЙ (ведущего нет), СНЯТЬ ВОПРОС - ТОЛЬКО АВТОР:
+        // чужой вопрос стирать нельзя, а «на него ответили» это факт всей комнаты.
+        var dn = document.createElement('button');
+        dn.textContent = q.done ? '↩️' : '✅';
+        dn.onclick = function () { amaApply({ op: 'done', id: q.id }, me, ''); send({ t: 'ama', op: 'done', id: q.id }); };
+        row.appendChild(dn);
+        if (q.who === me) {
+          var del = document.createElement('button');
+          del.textContent = '✕';
+          del.onclick = function () { amaApply({ op: 'del', id: q.id }, me, ''); send({ t: 'ama', op: 'del', id: q.id }); };
+          row.appendChild(del);
+        }
+        box.appendChild(row);
+      });
+      $('amanote').textContent = ama.length
+        ? 'Порядок задают голоса. ✅ - отвечено, ✕ - снять свой вопрос.'
+        : 'Вопросов пока нет. Задай первый - остальные проголосуют, и порядок сложится сам.';
+    }
+
+    function amaApply(m, who, nm) {
+      var op = m.op;
+      if (op === 'add') {
+        if (ama.length >= AMA_MAX) return;
+        if (ama.some(function (q) { return q.id === m.id; })) return;   // дедуп по id
+        ama.push({ id: String(m.id).slice(0, 24), who: who, nm: String(nm || '').slice(0, 40),
+                   x: String(m.x || '').slice(0, 200), v: {}, done: 0, ts: Number(m.ts) || Date.now() });
+      } else {
+        var q = null;
+        ama.forEach(function (r) { if (r.id === m.id) q = r; });
+        if (!q) return;
+        // ГОЛОС СЧИТАЕТСЯ ПО IDENTITY ОТПРАВИТЕЛЯ, А НЕ ПО ПОЛЮ СООБЩЕНИЯ. Поле пришло бы
+        // от клиента, и один человек накрутил бы себе сколько угодно голосов, не открывая
+        // ничего сложнее консоли (закон №32: гейт у действия).
+        if (op === 'vote') { if (q.v[who]) delete q.v[who]; else q.v[who] = 1; }
+        if (op === 'done') q.done = q.done ? 0 : 1;
+        if (op === 'del' && q.who === who) ama = ama.filter(function (r) { return r.id !== q.id; });
+      }
+      amaPaint();
+    }
+
+    function pollPaint() {
+      var card = $('poll');
+      if (!poll) {
+        $('pollq').textContent = '';
+        $('pollmkt').textContent = '';
+        $('pollbtns').innerHTML = '';
+        $('polltal').innerHTML = '';
+        $('pollnote').textContent = 'Голосования сейчас нет. Напиши вопрос - комната ответит '
+          + 'да/нет. Ссылка на рынок Polymarket покажет рядом, что думает рынок.';
+        $('pq').style.display = '';
+        $('pgo').style.display = '';
+        return;
+      }
+      $('pq').style.display = 'none';
+      $('pgo').style.display = 'none';
+      $('pollq').textContent = poll.q;
+      $('pollmkt').textContent = poll.mkt || '';
+      var me = room.localParticipant.identity;
+      var mine = (poll.v || {})[me] || '';
+      var opts = [['y', '👍 Да'], ['n', '👎 Нет'], ['a', '🤷 Воздержусь']];
+      var bts = $('pollbtns');
+      bts.innerHTML = '';
+      opts.forEach(function (o) {
+        var b = document.createElement('button');
+        b.className = 'pre' + (mine === o[0] ? ' on' : '');
+        b.textContent = o[1];
+        b.onclick = function () { pollApply({ op: 'vote', v: o[0] }, me); send({ t: 'poll', op: 'vote', v: o[0] }); };
+        bts.appendChild(b);
+      });
+      var vals = Object.keys(poll.v || {}).map(function (k) { return poll.v[k]; });
+      var tot = vals.length || 1;
+      var tal = $('polltal');
+      tal.innerHTML = '';
+      opts.forEach(function (o) {
+        var n = vals.filter(function (v) { return v === o[0]; }).length;
+        var line = document.createElement('div');
+        line.className = 'me';
+        line.textContent = o[1] + ' - ' + n + ' (' + Math.round(n * 100 / tot) + '%)';
+        var bar = document.createElement('div');
+        bar.className = 'bar' + (o[0] === 'n' ? ' n' : (o[0] === 'a' ? ' a' : ''));
+        bar.style.width = Math.max(2, Math.round(n * 100 / tot)) + '%';
+        tal.appendChild(line);
+        tal.appendChild(bar);
+      });
+      var stop = document.createElement('button');
+      stop.className = 'pre';
+      stop.textContent = '⏹ Закрыть голосование';
+      stop.onclick = function () { pollApply({ op: 'close' }, me); send({ t: 'poll', op: 'close' }); };
+      tal.appendChild(stop);
+      $('pollnote').textContent = 'Открыл: ' + (poll.by || '') + '. Голосовали: ' + vals.length
+        + '. Свой голос можно поменять.';
+    }
+
+    function pollApply(m, who, nm) {
+      if (m.op === 'open') {
+        poll = { id: String(m.id).slice(0, 24), q: String(m.q || '').slice(0, 140),
+                 mkt: String(m.mkt || '').slice(0, 200), by: String(nm || m.by || '').slice(0, 40), v: {} };
+      } else if (!poll) {
+        return;
+      } else if (m.op === 'vote') {
+        if (['y', 'n', 'a'].indexOf(m.v) < 0) return;
+        poll.v[who] = m.v;
+      } else if (m.op === 'close') {
+        poll = null;
+      } else if (m.op === 'mkt') {
+        poll.mkt = String(m.mkt || '').slice(0, 200);
+      }
+      pollPaint();
+    }
+
+    $('amabtn').onclick = function () {
+      var c = $('ama');
+      var on = c.style.display === 'none';
+      c.style.display = on ? '' : 'none';
+      $('amabtn').classList.toggle('on', on);
+      if (on) { amaPaint(); send({ t: 'ask' }); }
+    };
+    $('ago').onclick = function () {
+      var v = $('aq').value.trim();
+      if (!v) return;
+      var me = room.localParticipant.identity;
+      var m = { op: 'add', id: me.slice(0, 8) + '-' + Date.now().toString(36), x: v, ts: Date.now() };
+      amaApply(m, me, myLabel());
+      send({ t: 'ama', op: 'add', id: m.id, x: v, ts: m.ts, nm: myLabel() });
+      $('aq').value = '';
+    };
+    $('pollbtn').onclick = function () {
+      var c = $('poll');
+      var on = c.style.display === 'none';
+      c.style.display = on ? '' : 'none';
+      $('pollbtn').classList.toggle('on', on);
+      if (on) { pollPaint(); send({ t: 'ask' }); }
+    };
+    $('pgo').onclick = async function () {
+      var v = $('pq').value.trim();
+      if (!v) return;
+      var me = room.localParticipant.identity;
+      var id = me.slice(0, 8) + '-' + Date.now().toString(36);
+      pollApply({ op: 'open', id: id, q: v }, me, myLabel());
+      send({ t: 'poll', op: 'open', id: id, q: v, by: myLabel() });
+      $('pq').value = '';
+      // РЫНОК РЕЗОЛВИТ БОТ, А НЕ СТРАНИЦА. У нас нет ни ключа, ни права ходить в чужой
+      // API прямо отсюда, а главное - разбор ссылки и цена обязаны быть ТЕ ЖЕ, что в
+      // карточке рынка в личке: вторая копия правила разошлась бы с первой (закон №40).
+      if (initData && /polymarket\.com|^[a-z0-9-]{6,}$/i.test(v)) {
+        $('pollnote').textContent = 'Спрашиваю рынок у бота, это пара секунд…';
+        var res = await ask({ kind: 'rtcpoll', room: ROOM, q: v });
+        if (res && res.mkt) {
+          pollApply({ op: 'mkt', mkt: res.mkt }, me);
+          send({ t: 'poll', op: 'mkt', mkt: res.mkt });
+        } else {
+          pollPaint();
+        }
+      }
+    };
+
     [1, 3, 5, 10, 15].forEach(function (mm) {
       var b = document.createElement('button');
       b.className = 'pre';
@@ -1790,6 +2103,64 @@ registerProcessor('rnn-denoise', RnnProc);
     };
     $('tmrset').appendChild(tmrOff);
     $('tmr').onclick = function () { tmrMenu($('tmrset').style.display === 'none'); };
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ЖИВЫЕ СУБТИТРЫ
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // КНОПКА ЖМЁТ БОТА, как и запись: ключ SpeechKit в статическую страницу класть нельзя,
+    // а стриминговый API у него только gRPC - ни страница, ни Worker так не умеют.
+    // ВЕБ-ГОСТЮ КНОПКИ НЕТ: ящик принимает только подпись Telegram, и немая кнопка хуже
+    // отсутствующей. Ленту он при этом ВИДИТ - она едет каналом данных, который у него
+    // есть, и лишать его текста было бы наказанием без причины.
+    if (initData) {
+      var subBtn = $('subbtn');
+      subBtn.style.display = '';
+      showRec();                   // подпись обязана отвечать состоянию комнаты, а не порядку строк
+      subBtn.onclick = async function () {
+        subBtn.disabled = true;
+        say(subOn ? 'Прошу бота выключить субтитры…' : 'Прошу бота включить субтитры…');
+        await ask({ kind: 'rtcsub', room: ROOM });
+        subBtn.disabled = false;
+      };
+    } else {
+      $('subwhy').textContent = 'Субтитры включает тот, кто вошёл из Telegram. Тебе они '
+        + 'будут видны, как только их включат.';
+    }
+
+    //: СКОЛЬКО РЕПЛИК ДЕРЖИМ. Разговор идёт часами, и держать его целиком в DOM незачем -
+    //: на телефоне это заметно.
+    var SUB_KEEP = 60;
+    var subCur = {};               // незакрытая реплика КАЖДОГО говорящего, по identity
+    //: СТРОКА-ПОДСКАЗКА И СТРОКА-ИЗВЕСТИЕ ЖИВУТ В ОДНОМ МЕСТЕ, НО СТИРАЮТСЯ ПО-РАЗНОМУ.
+    //: «Слушаю...» - заглушка до первой реплики, её первая же реплика и снимает. А
+    //: «бюджет на исходе» присылает БОТ, и стереть его следующей фразой значит показать
+    //: предупреждение о деньгах ровно на те секунды, пока никто не говорит.
+
+    function subLine(who, nm, txt, final) {
+      var box = $('subs');
+      $('subbox').style.display = '';
+      var row = subCur[who];
+      if (!row || row.dataset.fin === '1') {
+        row = document.createElement('div');
+        row.className = 'sl part';
+        row.innerHTML = '<span class="who"></span> <span class="tx"></span>';
+        box.appendChild(row);
+        subCur[who] = row;
+      }
+      // ИМЯ БЕРЁТСЯ ИЗ ПОЛЯ, А НЕ У ОТПРАВИТЕЛЯ. Отправитель тут ВСЕГДА бот, и подпись у
+      // каждой реплики оказалась бы «📝 Субтитры» - тот же класс, что цвет штриха доски.
+      row.querySelector('.who').textContent = nm || who;
+      row.querySelector('.tx').textContent = txt;
+      row.className = 'sl ' + (final ? 'fin' : 'part');
+      if (final) row.dataset.fin = '1';
+      while (box.children.length > SUB_KEEP) box.removeChild(box.firstChild);
+      // ПРОКРУТКА ТОЛЬКО ЕСЛИ ЧЕЛОВЕК И ТАК ВНИЗУ: утащить его с середины разговора,
+      // который он перечитывает, - это отнять у него ленту.
+      if (box.scrollHeight - box.scrollTop - box.clientHeight < 60) {
+        box.scrollTop = box.scrollHeight;
+      }
+      if (!subSticky) $('subnote').textContent = '';
+    }
 
     // ═══ ЗАПИСЬ: КНОПКА ЖМЁТ БОТА, А НЕ LIVEKIT ═══
     // Ключом от Egress владеет БОТ - он же потом идёт за файлами и сшивает транскрипт.
@@ -1852,6 +2223,38 @@ registerProcessor('rnn-denoise', RnnProc);
         say('Не достучался до бота: ' + (e && e.message || e), true);
         return false;
       }
+    }
+
+    // ═══ ПОРТФЕЛЬ ДОКЛАДЧИКА: ТОЛЬКО ПО ЯВНОМУ ТАПУ ЕГО ВЛАДЕЛЬЦА ═══
+    // СНИМОК СОБИРАЕТ БОТ (у него привязанные счета и ключ DeBank), А ПУБЛИКУЕТ СТРАНИЦА.
+    // Так согласие встроено в устройство, а не обещано словами: бот физически не может
+    // показать комнате чужой счёт - он отдаёт текст ТОМУ, КТО НАЖАЛ, и дальше решает он.
+    // ВЕБ-ГОСТЮ КНОПОК НЕТ: ящик принимает только подпись Telegram, а счетов у него у нас
+    // нет вовсе - кнопка, которой нечем ответить, хуже отсутствующей.
+    if (initData) {
+      $('portbtns').style.display = '';
+      var portGo = async function (mode, btn) {
+        btn.disabled = true;
+        $('port').style.display = '';
+        $('portnote').textContent = 'Собираю счёт, это пара секунд…';
+        var res = await ask({ kind: 'rtcport', room: ROOM, mode: mode });
+        btn.disabled = false;
+        if (!res || !res.text) {
+          // ОТКАЗ НАЗЫВАЕТ ПРИЧИНУ. «Не получилось» тут значит четыре разных вещи (нет
+          // привязанного счёта, DeBank молчит, ты не в этой комнате, счёт пуст), и лечатся
+          // они по-разному.
+          $('portnote').textContent = (res && res.note) || 'Счёт не собрался. Причина не приехала.';
+          return;
+        }
+        $('portnote').textContent = '';
+        // ПОКАЗЫВАЕМ У СЕБЯ ТЕМ ЖЕ КОДОМ, ЧТО И У СОСЕДЕЙ: вторая ветка «а вот это моё»
+        // разошлась бы с первой на первой же правке (закон №40).
+        send({ t: 'port', x: res.text });
+        onData(new TextEncoder().encode(JSON.stringify({ t: 'port', x: res.text })),
+               room.localParticipant);
+      };
+      $('portsh').onclick = function () { portGo('share', $('portsh')); };
+      $('portusd').onclick = function () { portGo('usd', $('portusd')); };
     }
 
     // ═══ РАДИО В КОМНАТУ: ТОТ ЖЕ ЯЩИК, ЧТО У ЗАПИСИ ═══
@@ -1969,7 +2372,7 @@ registerProcessor('rnn-denoise', RnnProc);
       return null;
     }
 
-    room.on(LK.RoomEvent.DataReceived, function (payload, p) {
+    function onData(payload, p) {
       var m = null;
       try { m = JSON.parse(new TextDecoder().decode(payload)); } catch (e) { return; }
       if (!m || !m.t) return;
@@ -2003,6 +2406,57 @@ registerProcessor('rnn-denoise', RnnProc);
           cvApply({ t: 'd', id: st.id, k: st.k, x: st.x, p: st.p }, p.identity, '');
         });
       }
+      if (m.t === 'sub') {
+        // РЕПЛИКУ ПРИСЫЛАЕТ БОТ, А ГОВОРИТ ЧЕЛОВЕК: `who`/`nm` из ПОЛЕЙ сообщения.
+        subLine(String(m.who || '').slice(0, 64), String(m.nm || '').slice(0, 60),
+                String(m.x || '').slice(0, 400), !!m.f);
+      }
+      if (m.t === 'subnote') {
+        // ИЗВЕСТИЕ О СУБТИТРАХ ОТ БОТА (бюджет на исходе, субтитры выключились). Молча
+        // выключившиеся субтитры человек читает как поломку, поэтому причина СТОИТ НА
+        // ЭКРАНЕ и переживает следующую реплику.
+        subNote(String(m.x || '').slice(0, 200), true);
+      }
+      if (m.t === 'ama' && p) amaApply(m, p.identity, nameOf(p));
+      if (m.t === 'poll' && p) pollApply(m, p.identity, nameOf(p));
+      if (m.t === 'amast' && p) {
+        // СНИМОК ОЧЕРЕДИ ДЛЯ ВОШЕДШЕГО ПОЗЖЕ. Голоса приезжают КАРТОЙ, а не числом:
+        // число нельзя ни проверить, ни изменить своим тапом - «👍 7» превратилось бы в
+        // «👍 8» у одного и осталось «7» у всех остальных.
+        if (!ama.length) {
+          ama = (m.s || []).slice(0, AMA_MAX).map(function (q) {
+            return { id: String(q.id || '').slice(0, 24), who: String(q.who || '').slice(0, 64),
+                     nm: String(q.nm || '').slice(0, 40), x: String(q.x || '').slice(0, 200),
+                     v: (q.v && typeof q.v === 'object') ? q.v : {}, done: q.done ? 1 : 0,
+                     ts: Number(q.ts) || 0 };
+          });
+          amaPaint();
+        }
+      }
+      if (m.t === 'pollst' && p && !poll && m.s) {
+        poll = { id: String(m.s.id || '').slice(0, 24), q: String(m.s.q || '').slice(0, 140),
+                 mkt: String(m.s.mkt || '').slice(0, 200), by: String(m.s.by || '').slice(0, 40),
+                 v: (m.s.v && typeof m.s.v === 'object') ? m.s.v : {} };
+        pollPaint();
+      }
+      if (m.t === 'port' && p) {
+        // ПОРТФЕЛЬ ПОКАЗЫВАЕТСЯ ТОЛЬКО ТЕМ, КТО СЕЙЧАС В КОМНАТЕ, И НЕ ДОГОНЯЕТ ВОШЕДШИХ
+        // ПОЗЖЕ - НАРОЧНО. Это чужие деньги: человек показал их тем, с кем говорил, а не
+        // всем, кто заглянет за следующий час. Поэтому в ответе на `ask` его нет.
+        $('port').style.display = '';
+        var pb = $('portbox');
+        pb.innerHTML = '';
+        var h = document.createElement('div');
+        h.className = 'nm';
+        h.textContent = '💼 ' + nameOf(p);
+        pb.appendChild(h);
+        var body = document.createElement('div');
+        body.className = 'me';
+        body.textContent = String(m.x || '').slice(0, 900);
+        pb.appendChild(body);
+        $('portnote').textContent = 'Показал сам, по своему тапу. Вошедшим позже это не '
+          + 'достанется - карточка живёт только у тех, кто сейчас в комнате.';
+      }
       if (m.t === 'chart' && p) {
         chartSet(m.sym, m.tf, nameOf(p), false);
       }
@@ -2015,6 +2469,8 @@ registerProcessor('rnn-denoise', RnnProc);
           send({ t: 'tmr', left: Math.round((tmrEnd - Date.now()) / 1000), by: myLabel() });
         }
         if (strokes.length) cvSendHistory();
+        if (ama.length) send({ t: 'amast', s: ama.slice(0, AMA_MAX) });
+        if (poll) send({ t: 'pollst', s: poll });
       }
       if (m.t === 'tmr') {
         // ЧУЖОЙ ТАЙМЕР ЗАМЕНЯЕТ НАШ, А НЕ ВСТАЁТ ВТОРЫМ: таймер тут один на комнату, и
@@ -2028,7 +2484,11 @@ registerProcessor('rnn-denoise', RnnProc);
         $('mic').classList.add('off');
         say('Ведущий попросил тишины - твой микрофон выключен.');
       }
-    });
+    }
+    // ДВЕРЬ ОДНА, И ПОЭТОМУ У НЕЁ ЕСТЬ ИМЯ. Свой же портфель мы показываем ТЕМ ЖЕ
+    // разбором, что и чужой: вторая ветка «а вот это моё» разошлась бы с первой на первой
+    // же правке, и человек видел бы у себя не то, что видят соседи (закон №40).
+    room.on(LK.RoomEvent.DataReceived, onData);
 
     // ВОШЁЛ - СПРОСИЛ, ЧТО В КОМНАТЕ УЖЕ ЕСТЬ. Сердцебиение догнало бы и само, но до
     // пяти секунд перед пустым графиком человек читает как «не работает», а доску
