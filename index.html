@@ -68,6 +68,25 @@
                font-size:13px; font-weight:500; background:#25252e; border-radius:999px; }
   /* ВСПЛЫВАЮЩИЕ РЕАКЦИИ ЖИВУТ НАД НИЖНЕЙ ПОЛОСОЙ И НЕ ЛОВЯТ ТАПЫ (`pointer-events:none`):
      иначе чужая реакция, пролетающая над кнопкой микрофона, съедала бы нажатие. */
+  /* ГРАФИК И ХОЛСТ ЖИВУТ В ОДНОЙ КОРОБКЕ, И ЭТО НЕ ОФОРМЛЕНИЕ: холст рисуется ПОВЕРХ
+     графика, значит его координаты обязаны считаться от ЭТОЙ коробки, а не от экрана.
+     `position:relative` тут - несущая конструкция. */
+  #chartbox { position:relative; width:100%; height:56vw; max-height:340px; min-height:190px;
+              border-radius:10px; overflow:hidden; background:#0d0d12; }
+  #chartbox iframe { width:100%; height:100%; border:0; display:block; }
+  /* ХОЛСТ ЛОВИТ ТАПЫ ТОЛЬКО КОГДА РИСУЮТ. Иначе он накрыл бы график целиком, и
+     прокрутить или увеличить свечи стало бы нельзя - мы бы сломали то, поверх чего
+     рисуем. */
+  /* ЯВНЫЕ 100% ОБЯЗАТЕЛЬНЫ, И ОДНОГО `inset:0` ЗДЕСЬ НЕ ХВАТАЕТ. `canvas` - ЗАМЕЩАЕМЫЙ
+     элемент: при `width:auto` он берёт свой intrinsic-размер 300x150 и растянутым НЕ
+     становится, в отличие от div'а с теми же правилами. Живьём это выглядело так: холст
+     есть, `pointer-events:auto` стоит, а `elementFromPoint` в середине графика отдаёт
+     `chartbox` - то есть рисование не работало вовсе. Чтением кода не видно, поймано
+     браузерной пробой. */
+  #draw { position:absolute; inset:0; width:100%; height:100%;
+          touch-action:none; pointer-events:none; }
+  #draw.on { pointer-events:auto; }
+  #chartwho { color:var(--mut); font-size:12px; margin:6px 0 0; }
   #pops { position:fixed; left:0; right:0; bottom:78px; padding:0 14px; display:flex;
           flex-direction:column; align-items:center; gap:4px; pointer-events:none; z-index:5; }
   .pop { background:rgba(30,30,38,.94); border-radius:999px; padding:5px 12px; font-size:14px;
@@ -86,6 +105,17 @@
 <div id="screens"></div>
 <p id="state"></p>
 
+<!-- КРИПТО-ПАНЕЛЬ. Свёрнута по умолчанию: график занимает пол-экрана, а комнату
+     открывают ради разговора - разворачивает тот, кому он нужен. -->
+<div class="card" id="crypto" style="display:none">
+  <div id="chartbox"><canvas id="draw"></canvas></div>
+  <p class="me" id="chartwho"></p>
+  <div id="syms"></div>
+  <div id="tfs"></div>
+  <div id="tools2"></div>
+  <p class="me" id="drawhint"></p>
+</div>
+
 <!-- РЕАКЦИИ ВЫШЕ СЛУЖЕБНЫХ КНОПОК: по ним тапают посреди чужой реплики, не отводя
      взгляда от списка людей, а «показать экран» ищут глазами один раз за созвон. -->
 <div class="card" id="react">
@@ -97,6 +127,7 @@
 <div id="tools" class="card">
   <button id="hand" class="wide">✋ Поднять руку</button>
   <button id="tmr" class="wide">⏱ Таймер</button>
+  <button id="chart" class="wide">📈 График и доска</button>
   <div id="tmrset" style="display:none"></div>
   <button id="show" class="wide" style="display:none"></button>
   <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
@@ -145,7 +176,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'e580f88ce1c3';
+  var VERSION = '7df91d0557b4';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -1252,10 +1283,32 @@ registerProcessor('rnn-denoise', RnnProc);
     // Остаток от расхождения часов не зависит вовсе: каждый считает СВОЙ дедлайн от
     // своего же «сейчас», а задержка канала данных (десятки миллисекунд) для
     // пятиминутного таймера не значит ничего.
-    var tmrEnd = 0, tmrBy = '', tmrTick = null, tmrBeat = null, tmrFired = false;
+    var tmrEnd = 0, tmrBy = '', tmrTick = null, tmrFired = false;
 
     function stopTmrLoop() { if (tmrTick) { clearInterval(tmrTick); tmrTick = null; } }
-    function stopBeat() { if (tmrBeat) { clearInterval(tmrBeat); tmrBeat = null; } }
+
+    // ═══ ОДИН МЕХАНИЗМ «ДОГНАТЬ ВОШЕДШЕГО ПОЗЖЕ» НА ВСЁ ОБЩЕЕ СОСТОЯНИЕ ═══
+    // Канал данных доставляет ТОЛЬКО тем, кто уже в комнате. Значит у каждого общего
+    // состояния (таймер, график) обязан быть повтор - и это ОДНО правило, а не по копии
+    // на фичу: две копии разъехались бы периодом и условием остановки, а заметил бы это
+    // человек, у которого «у всех график BTC, а у меня пусто» (закон №40).
+    var BEAT_MS = 5000;
+    var beats = {};
+    function beat(key, fn) {
+        stopBeat(key);
+        if (!fn) return;
+        beats[key] = setInterval(function () {
+            var m = fn();
+            if (m) send(m); else stopBeat(key);
+        }, BEAT_MS);
+    }
+    function stopBeat(key) {
+        if (key === undefined) {                 // без имени - погасить всё (выход/сброс)
+            Object.keys(beats).forEach(stopBeat);
+            return;
+        }
+        if (beats[key]) { clearInterval(beats[key]); delete beats[key]; }
+    }
     function tmrMenu(on) { $('tmrset').style.display = on ? '' : 'none'; }
 
     function tmrPaint() {
@@ -1274,7 +1327,7 @@ registerProcessor('rnn-denoise', RnnProc);
       if (tmrFired) return;
       tmrFired = true;
       stopTmrLoop();
-      stopBeat();
+      stopBeat('tmr');
       $('tmr').classList.remove('on');
       // У КОНЦА ТАЙМЕРА ДВА НЕЗАВИСИМЫХ СПОСОБА ДОЙТИ. Звук может не сыграть вовсе -
       // браузер держит аудио-контекст, пока человек ничего не нажимал, - и тогда
@@ -1293,7 +1346,7 @@ registerProcessor('rnn-denoise', RnnProc);
     //: mine=true - таймер ставим МЫ, значит на нас же сердцебиение.
     function tmrSet(sec, by, mine) {
       stopTmrLoop();
-      stopBeat();
+      stopBeat('tmr');
       tmrFired = false;
       if (!(sec > 0)) {                       // ноль и меньше - снятие
         tmrEnd = 0;
@@ -1314,12 +1367,407 @@ registerProcessor('rnn-denoise', RnnProc);
       // ЧЕСТНАЯ ГРАНИЦА: уйдёт поставивший - повтор прекратится, но у тех, кто уже
       // получил остаток, таймер досчитает и прозвонит сам; не увидят его только те, кто
       // войдёт ПОСЛЕ его ухода.
-      tmrBeat = setInterval(function () {
+      beat('tmr', function () {
         var left = Math.round((tmrEnd - Date.now()) / 1000);
-        if (left <= 0) { stopBeat(); return; }
-        send({ t: 'tmr', left: left, by: myLabel() });
-      }, 5000);
+        if (left <= 0) return null;              // вернул null - повтор гасится сам
+        return { t: 'tmr', left: left, by: myLabel() };
+      });
     }
+
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ГРАФИК: ОДИН НА КОМНАТУ, МЕНЯЕТ ЛЮБОЙ, И ВИДНО КТО
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ВЕДУЩЕГО В ЭТОЙ КОМНАТЕ НЕТ КАК ПОНЯТИЯ, и заводить его ради одной кнопки значило
+    // бы городить права там, где у нас всё построено на договорённости («заглушить всех»
+    // это просьба, а не приказ). Поэтому пару меняет любой, а рядом ИМЯ того, кто
+    // поменял: спорить о том, кто сбил график, не придётся.
+    //
+    // ВИДЖЕТ НЕ УМЕЕТ МЕНЯТЬ СИМВОЛ НА ЛЕТУ. У бесплатного встраиваемого графика нет
+    // наружного JS-API (платная Charting Library - другая история и другие деньги),
+    // поэтому смена пары это ПЕРЕСОЗДАНИЕ. Отсюда же берётся мигание при переключении -
+    // это свойство виджета, а не наша недоделка.
+    var SYMS = [['BTC', 'BINANCE:BTCUSDT'], ['ETH', 'BINANCE:ETHUSDT'],
+                ['SOL', 'BINANCE:SOLUSDT'], ['TON', 'BINANCE:TONUSDT'],
+                ['DXY', 'TVC:DXY'], ['GOLD', 'TVC:GOLD']];
+    var TFS = [['5м', '5'], ['15м', '15'], ['1ч', '60'], ['4ч', '240'], ['D', 'D']];
+    var chSym = '', chTf = '60', chBy = '', chOpen = false;
+
+    //: СИМВОЛ ЧИСТИТСЯ, ПОТОМУ ЧТО ПРИХОДИТ ОТ КЛИЕНТА И УЕЗЖАЕТ В ЧУЖОЙ ВИДЖЕТ. Строка
+    //: из канала данных - это строка, которую написал сосед, а не мы; пустить её как есть
+    //: значит дать ему решать, что подставится в конфиг у всех остальных.
+    function symOk(x) {
+      var v = String(x || '').toUpperCase().replace(/[^A-Z0-9:_.\-]/g, '').slice(0, 24);
+      return /^[A-Z0-9_.\-]{2,}(:[A-Z0-9_.\-]{2,})?$/.test(v) ? v : '';
+    }
+    function tfOk(x) {
+      var v = String(x || '').toUpperCase().slice(0, 4);
+      return /^(1|3|5|15|30|60|120|240|D|W|M)$/.test(v) ? v : '';
+    }
+
+    function chartPaint() {
+      var box = $('chartbox');
+      $('crypto').style.display = chOpen ? '' : 'none';
+      $('chart').classList.toggle('on', chOpen);
+      if (!chOpen) return;
+      // ХОЛСТ ПЕРЕЖИВАЕТ ПЕРЕСОЗДАНИЕ ГРАФИКА: он лежит В ТОЙ ЖЕ коробке, и снеси мы её
+      // целиком - вместе с чужим графиком стёрлись бы все чужие штрихи.
+      var keep = $('draw');
+      [].slice.call(box.children).forEach(function (c) { if (c !== keep) box.removeChild(c); });
+      if (!chSym) {
+        $('chartwho').textContent = 'Выбери пару - график увидят все, кто в комнате.';
+        return;
+      }
+      var host = document.createElement('div');
+      host.style.cssText = 'position:absolute;inset:0';
+      box.insertBefore(host, keep);
+      var sc = document.createElement('script');
+      sc.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+      sc.async = true;
+      sc.text = JSON.stringify({
+        symbol: chSym, interval: chTf, theme: 'dark', style: '1', locale: 'ru',
+        hide_side_toolbar: true, hide_top_toolbar: false, allow_symbol_change: false,
+        save_image: false, autosize: true,
+      });
+      host.appendChild(sc);
+      $('chartwho').textContent = chSym + ' · ' + chTf
+        + (chBy ? ' · поставил ' + chBy : '');
+      paintSymBtns();
+    }
+
+    function chartSet(sym, tf, by, mine) {
+      var s2 = symOk(sym), t2 = tfOk(tf) || chTf;
+      if (sym && !s2) {
+        // ОТБРОШЕННОЕ НАЗЫВАЕТСЯ. Молча проигнорировать чужой символ значит оставить
+        // соседа в уверенности, что у всех обновилось.
+        say('Пара «' + String(sym).slice(0, 20) + '» не похожа на тикер - не меняю.', true);
+        return;
+      }
+      chSym = s2; chTf = t2; chBy = by || '';
+      if (s2 && !chOpen) chOpen = true;      // прислали график - открываем панель
+      chartPaint();
+      if (!mine) return;
+      beat('chart', function () {
+        return chSym ? { t: 'chart', sym: chSym, tf: chTf, by: myLabel() } : null;
+      });
+      send({ t: 'chart', sym: chSym, tf: chTf, by: myLabel() });
+    }
+
+    function paintSymBtns() {
+      [].slice.call($('syms').children).forEach(function (b) {
+        b.classList.toggle('on', b.dataset.sym === chSym);
+      });
+      [].slice.call($('tfs').children).forEach(function (b) {
+        b.classList.toggle('on', b.dataset.tf === chTf);
+      });
+    }
+
+    SYMS.forEach(function (p) {
+      var b = document.createElement('button');
+      b.className = 'chip'; b.textContent = p[0]; b.dataset.sym = p[1];
+      b.onclick = function () { chartSet(p[1], chTf, 'Ты', true); };
+      $('syms').appendChild(b);
+    });
+    var bOther = document.createElement('button');
+    bOther.className = 'chip'; bOther.textContent = '✏️ Своя';
+    bOther.onclick = function () {
+      var v = '';
+      try { v = prompt('Пара как в TradingView, например BINANCE:ARBUSDT') || ''; } catch (e) {}
+      if (v.trim()) chartSet(v.trim(), chTf, 'Ты', true);
+    };
+    $('syms').appendChild(bOther);
+    TFS.forEach(function (p) {
+      var b = document.createElement('button');
+      b.className = 'chip'; b.textContent = p[0]; b.dataset.tf = p[1];
+      b.onclick = function () { if (chSym) chartSet(chSym, p[1], 'Ты', true); };
+      $('tfs').appendChild(b);
+    });
+    // ═════════════════════════════════════════════════════════════════════════════
+    // СОВМЕСТНЫЙ ХОЛСТ ПОВЕРХ ГРАФИКА
+    // ═════════════════════════════════════════════════════════════════════════════
+    // ПОЧЕМУ СВОЙ СЛОЙ, А НЕ РАЗМЕТКА TRADINGVIEW. Бесплатный виджет свою разметку наружу
+    // не отдаёт вовсе, а Charting Library, которая отдаёт, - платная лицензия. Значит
+    // либо свой холст, либо ничего.
+    //
+    // ═══ КООРДИНАТЫ ДОЛЕЙ, А НЕ ПИКСЕЛЕЙ - ЭТО НЕСУЩЕЕ, А НЕ АККУРАТНОСТЬ ═══
+    // У меня телефон 390 px, у соседа десктоп 1200. Пошли мы пиксели - его «вот этот
+    // уровень» лёг бы у меня на треть экрана левее, то есть указывал бы на другую цену.
+    // Доли (0..1) от коробки графика переносятся между экранами без единой поправки.
+    //
+    // ЧТО ЕДЕТ В КАНАЛ. Штрихи ПРИРАЩЕНИЯМИ и пачками (не по точке на каждое движение
+    // пальца - это залило бы канал), полный штрих не пересылается никогда.
+    var CV_MAX = 400;            // штрихов на комнату: без потолка холст растёт вечно
+    var CV_PTS = 400;            // точек в штрихе
+    var CV_BATCH = 120;          // мс между пачками точек
+    var strokes = [], curId = 0, cur = null, tool = 'pen', drawOn = false;
+    var outbox = null, batchT = null, tips = {};
+
+    function myColor(id) {
+      // ЦВЕТ ВЫВОДИТСЯ ИЗ IDENTITY, А НЕ РАЗДАЁТСЯ ПО ОЧЕРЕДИ: у всех в комнате он обязан
+      // получиться ОДИН И ТОТ ЖЕ, иначе «синюю линию нарисовал Ваня» у соседа окажется
+      // зелёной. Раздача по порядку входа этого не даёт - порядок у каждого свой.
+      var h = 0, str = String(id || '');
+      for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
+      return 'hsl(' + h + ',85%,62%)';
+    }
+
+    function cvFit() {
+      var c = $('draw'), b = $('chartbox');
+      if (!c || !b) return null;
+      var r = b.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+      if (!r.width || !r.height) return null;
+      if (c.width !== Math.round(r.width * dpr) || c.height !== Math.round(r.height * dpr)) {
+        c.width = Math.round(r.width * dpr);
+        c.height = Math.round(r.height * dpr);
+      }
+      return { c: c, w: r.width, h: r.height, dpr: dpr, box: r };
+    }
+
+    function cvDraw() {
+      var f = cvFit();
+      if (!f) return;
+      var g = f.c.getContext('2d');
+      g.setTransform(f.dpr, 0, 0, f.dpr, 0, 0);
+      g.clearRect(0, 0, f.w, f.h);
+      g.lineCap = 'round';
+      g.lineJoin = 'round';
+      strokes.forEach(function (st) {
+        var p = st.p || [];
+        if (!p.length) return;
+        g.strokeStyle = st.c;
+        g.fillStyle = st.c;
+        g.lineWidth = 2.5;
+        if (st.k === 'text') {
+          g.font = '600 14px -apple-system,Segoe UI,Roboto,sans-serif';
+          g.fillText(String(st.x || '').slice(0, 60), p[0][0] * f.w, p[0][1] * f.h);
+          return;
+        }
+        g.beginPath();
+        g.moveTo(p[0][0] * f.w, p[0][1] * f.h);
+        for (var i = 1; i < p.length; i++) g.lineTo(p[i][0] * f.w, p[i][1] * f.h);
+        g.stroke();
+        if (st.k === 'arrow' && p.length > 1) {
+          // СТРЕЛКА - ЭТО ЛИНИЯ ПЛЮС ДВА ШТРИХА НА КОНЦЕ, а не отдельный инструмент с
+          // отдельным протоколом: чем меньше видов штриха, тем меньше мест разойтись.
+          var a = p[p.length - 2], b2 = p[p.length - 1];
+          var ang = Math.atan2((b2[1] - a[1]) * f.h, (b2[0] - a[0]) * f.w);
+          var x2 = b2[0] * f.w, y2 = b2[1] * f.h;
+          g.beginPath();
+          g.moveTo(x2, y2);
+          g.lineTo(x2 - 11 * Math.cos(ang - 0.4), y2 - 11 * Math.sin(ang - 0.4));
+          g.moveTo(x2, y2);
+          g.lineTo(x2 - 11 * Math.cos(ang + 0.4), y2 - 11 * Math.sin(ang + 0.4));
+          g.stroke();
+        }
+      });
+      // ИМЯ РЯДОМ С ЧУЖИМ КУРСОРОМ: без него линия появляется «сама», и понять, кто
+      // сейчас чертит, нельзя.
+      var now = Date.now();
+      Object.keys(tips).forEach(function (k) {
+        var t = tips[k];
+        if (now - t.at > 2200) { delete tips[k]; return; }
+        g.fillStyle = t.c;
+        g.font = '600 11px -apple-system,Segoe UI,Roboto,sans-serif';
+        g.fillText(t.n, t.x * f.w + 8, t.y * f.h - 6);
+      });
+    }
+
+    function cvApply(m, who, nm) {
+      // ДЕДУП ПО ID ШТРИХА. История догоняет вошедшего кусками и может прийти дважды -
+      // от двоих сразу; без дедупа линии удвоились бы и потолстели.
+      if (m.t === 'd') {
+        var id = String(m.id || '').slice(0, 40);
+        if (!id) return;
+        var st = null;
+        for (var i = strokes.length - 1; i >= 0; i--) if (strokes[i].id === id) { st = strokes[i]; break; }
+        if (!st) {
+          if (strokes.length >= CV_MAX) strokes.shift();
+          // ═══ ЦВЕТ БЕРЁТСЯ ИЗ ID ШТРИХА, А НЕ У ОТПРАВИТЕЛЯ СООБЩЕНИЯ ═══
+          // Пока штрихи ездят только «в прямом эфире», отправитель и автор совпадают, и
+          // разница невидима. Но историю вошедшему позже пересылает КТО-ТО ОДИН - и по
+          // цвету отправителя все чужие линии стали бы ЕГО цветом, то есть доска у
+          // новичка выглядела бы иначе, чем у всех остальных.
+          st = { id: id, c: myColor(id.split('|')[0] || who),
+                 k: String(m.k || 'pen').slice(0, 6), p: [],
+                 x: String(m.x || '').slice(0, 60) };
+          strokes.push(st);
+        }
+        var pts = (m.p || []).slice(0, CV_PTS);
+        // У ЛИНИИ И СТРЕЛКИ КОНЕЦ ЗАМЕНЯЕТСЯ, А НЕ ДОПИСЫВАЕТСЯ: иначе «резиновая» линия
+        // оставляла бы за собой веер промежуточных положений.
+        if (st.k === 'line' || st.k === 'arrow') st.p = pts;
+        else st.p = st.p.concat(pts).slice(-CV_PTS);
+        if (st.p.length && nm) {
+          tips[who] = { n: nm, c: st.c, x: st.p[st.p.length - 1][0],
+                        y: st.p[st.p.length - 1][1], at: Date.now() };
+        }
+      } else if (m.t === 'dx') {
+        var kill = {};
+        (m.ids || []).forEach(function (x) { kill[String(x)] = 1; });
+        strokes = strokes.filter(function (x) { return !kill[x.id]; });
+      } else if (m.t === 'dc') {
+        // ОЧИСТКА БЫВАЕТ ДВУХ РОДОВ, И ЭТО РАЗНЫЕ ПРАВА. Свои штрихи человек убирает
+        // молча; ЧУЖИЕ - только явной кнопкой, и она НАЗЫВАЕТ, кто это сделал: стёртая
+        // без объяснения чужая работа читается как сбой.
+        if (m.all) {
+          strokes = [];
+          // ПОДПИСИ ЧУЖИХ КУРСОРОВ ЖИВУТ ОТДЕЛЬНО ОТ ШТРИХОВ, и «очистить» обязано снести
+          // и их: имя, висящее над пустой доской, читается как недостёртый штрих. Поймано
+          // пробой - после очистки на холсте оставались непрозрачные пиксели.
+          tips = {};
+          if (nm) popup(nm + '  🧹 очистил доску');
+        } else {
+          strokes = strokes.filter(function (x) { return x.id.indexOf(who + '|') !== 0; });
+        }
+      }
+      cvDraw();
+    }
+
+    //: Отдать историю доски вошедшему позже. Кусками: у канала данных сообщение не
+    //: резиновое, а сотня штрихов в одном пакете его просто не пролезет.
+    //: ДЕДУП НА ПРИЁМЕ (по id штриха) делает лишние копии безвредными - поэтому отвечать
+    //: могут все, у кого есть история, и договариваться о «главном» не нужно.
+    function cvSendHistory() {
+      var CH = 20;
+      for (var i = 0; i < strokes.length; i += CH) {
+        send({ t: 'dh', s: strokes.slice(i, i + CH).map(function (st) {
+          return { id: st.id, k: st.k, x: st.x, p: st.p };
+        }) });
+      }
+    }
+
+    function flush() {
+      if (!outbox) return;
+      send(outbox);
+      outbox = null;
+    }
+    function pushPts(pts) {
+      if (!cur) return;
+      if (!outbox) outbox = { t: 'd', id: cur.id, k: cur.k, p: [] };
+      outbox.p = (cur.k === 'line' || cur.k === 'arrow') ? pts.slice() : outbox.p.concat(pts);
+      if (!batchT) {
+        // ПАЧКАМИ, А НЕ ПО ТОЧКЕ НА КАЖДОЕ ДВИЖЕНИЕ: палец даёт под сотню событий в
+        // секунду, и по одному сообщению на каждое канал данных встанет колом.
+        batchT = setTimeout(function () { batchT = null; flush(); }, CV_BATCH);
+      }
+    }
+
+    function xy(e) {
+      var f = cvFit();
+      if (!f) return null;
+      return [Math.max(0, Math.min(1, (e.clientX - f.box.left) / f.w)),
+              Math.max(0, Math.min(1, (e.clientY - f.box.top) / f.h))];
+    }
+
+    var cvEl = $('draw');
+    cvEl.addEventListener('pointerdown', function (e) {
+      if (!drawOn) return;
+      var p = xy(e);
+      if (!p) return;
+      e.preventDefault();
+      var me = room.localParticipant.identity;
+      if (tool === 'erase') {
+        var kill = strokes.filter(function (st) {
+          return (st.p || []).some(function (q) {
+            return Math.abs(q[0] - p[0]) < 0.035 && Math.abs(q[1] - p[1]) < 0.05;
+          });
+        }).map(function (st) { return st.id; });
+        if (!kill.length) return;
+        cvApply({ t: 'dx', ids: kill }, me, '');
+        send({ t: 'dx', ids: kill });
+        return;
+      }
+      if (tool === 'text') {
+        var v = '';
+        try { v = (prompt('Что подписать?') || '').slice(0, 60); } catch (e2) {}
+        if (!v.trim()) return;
+        var tid = me + '|' + (++curId);
+        var msg = { t: 'd', id: tid, k: 'text', x: v, p: [[+p[0].toFixed(4), +p[1].toFixed(4)]] };
+        cvApply(msg, me, '');
+        send(msg);
+        return;
+      }
+      cur = { id: me + '|' + (++curId), k: tool, p: [p] };
+      cvApply({ t: 'd', id: cur.id, k: cur.k, p: [rd(p)] }, me, '');
+      pushPts([rd(p)]);
+      try { cvEl.setPointerCapture(e.pointerId); } catch (e3) {}
+    });
+    function rd(p) { return [+p[0].toFixed(4), +p[1].toFixed(4)]; }
+    cvEl.addEventListener('pointermove', function (e) {
+      if (!drawOn || !cur) return;
+      var p = xy(e);
+      if (!p) return;
+      e.preventDefault();
+      var me = room.localParticipant.identity;
+      if (cur.k === 'line' || cur.k === 'arrow') {
+        cur.p = [cur.p[0], p];
+        cvApply({ t: 'd', id: cur.id, k: cur.k, p: [rd(cur.p[0]), rd(p)] }, me, '');
+        pushPts([rd(cur.p[0]), rd(p)]);
+      } else {
+        cur.p.push(p);
+        cvApply({ t: 'd', id: cur.id, k: cur.k, p: [rd(p)] }, me, '');
+        pushPts([rd(p)]);
+      }
+    });
+    function endStroke() {
+      if (!cur) return;
+      cur = null;
+      if (batchT) { clearTimeout(batchT); batchT = null; }
+      flush();                 // ХВОСТ ПАЧКИ ДОСЫЛАЕМ СРАЗУ: иначе конец линии не доедет
+    }
+    cvEl.addEventListener('pointerup', endStroke);
+    cvEl.addEventListener('pointercancel', endStroke);
+    cvEl.addEventListener('pointerleave', endStroke);
+
+    [['✏️', 'pen'], ['📏', 'line'], ['➡️', 'arrow'], ['🔤', 'text'], ['🧽', 'erase']]
+      .forEach(function (p) {
+        var b = document.createElement('button');
+        b.className = 'chip'; b.textContent = p[0]; b.dataset.k = p[1];
+        b.onclick = function () {
+          // ТАП ПО АКТИВНОМУ ИНСТРУМЕНТУ ВЫКЛЮЧАЕТ РИСОВАНИЕ. Без этого выйти из режима
+          // рисования было бы нечем, а холст ловит тапы и не пускает их к графику.
+          if (drawOn && tool === p[1]) { drawOn = false; } else { drawOn = true; tool = p[1]; }
+          paintTools();
+        };
+        $('tools2').appendChild(b);
+      });
+    var bMine = document.createElement('button');
+    bMine.className = 'chip'; bMine.textContent = '↩️ Моё';
+    bMine.onclick = function () {
+      var me = room.localParticipant.identity;
+      cvApply({ t: 'dc', all: false }, me, '');
+      send({ t: 'dc', all: false });
+    };
+    $('tools2').appendChild(bMine);
+    var bAll = document.createElement('button');
+    bAll.className = 'chip'; bAll.textContent = '🧹 Всё';
+    bAll.onclick = function () {
+      cvApply({ t: 'dc', all: true }, room.localParticipant.identity, '');
+      send({ t: 'dc', all: true });
+      popup('Ты  🧹 очистил доску');
+    };
+    $('tools2').appendChild(bAll);
+
+    function paintTools() {
+      [].slice.call($('tools2').children).forEach(function (b) {
+        b.classList.toggle('on', !!b.dataset.k && drawOn && b.dataset.k === tool);
+      });
+      $('draw').classList.toggle('on', drawOn);
+      $('drawhint').textContent = drawOn
+        ? 'Рисуешь. Тап по тому же инструменту - выйти и вернуть график под палец.'
+        : 'Рисуют все сразу, каждый своим цветом. Доска живёт и без графика: под ней '
+          + 'можно ничего не открывать.';
+    }
+    paintTools();
+    window.addEventListener('resize', cvDraw);
+
+    $('chart').onclick = function () {
+      chOpen = !chOpen;
+      chartPaint();
+      // ОТКРЫЛИ ПУСТУЮ ПАНЕЛЬ - СПРАШИВАЕМ У КОМНАТЫ, ЧТО ТАМ УЖЕ ЕСТЬ. Сердцебиение
+      // догонит и само, но ждать до пяти секунд перед пустым экраном человек прочитает
+      // как «не работает».
+      if (chOpen && !chSym) send({ t: 'ask' });
+    };
 
     [1, 3, 5, 10, 15].forEach(function (mm) {
       var b = document.createElement('button');
@@ -1543,6 +1991,31 @@ registerProcessor('rnn-denoise', RnnProc);
           popup(nameOf(p) + '  🔊 звук из новой версии - обнови страницу');
         }
       }
+      if ((m.t === 'd' || m.t === 'dx' || m.t === 'dc') && p) {
+        cvApply(m, p.identity, nameOf(p));
+      }
+      if (m.t === 'dh' && p) {
+        // ИСТОРИЯ ПРИМЕНЯЕТСЯ ТЕМ ЖЕ КОДОМ, ЧТО И ЖИВОЙ ШТРИХ. Отдельная ветка «а вот
+        // это из истории» была бы вторым ответом на вопрос «как лечь штриху» и разошлась
+        // бы с первым (закон №40); имя не передаём - подпись у чужого курсора относится
+        // к тому, кто чертит СЕЙЧАС.
+        (m.s || []).slice(0, 60).forEach(function (st) {
+          cvApply({ t: 'd', id: st.id, k: st.k, x: st.x, p: st.p }, p.identity, '');
+        });
+      }
+      if (m.t === 'chart' && p) {
+        chartSet(m.sym, m.tf, nameOf(p), false);
+      }
+      // «ЧТО У ВАС ТАМ?» - ОТВЕЧАЕТ ТОЛЬКО ТОТ, У КОГО СОСТОЯНИЕ ЕСТЬ. Ответ идёт всем
+      // (адресной посылки у канала нет), и это не беда: у остальных он просто совпадёт с
+      // тем, что уже нарисовано.
+      if (m.t === 'ask') {
+        if (chSym) send({ t: 'chart', sym: chSym, tf: chTf, by: myLabel() });
+        if (tmrEnd > Date.now()) {
+          send({ t: 'tmr', left: Math.round((tmrEnd - Date.now()) / 1000), by: myLabel() });
+        }
+        if (strokes.length) cvSendHistory();
+      }
       if (m.t === 'tmr') {
         // ЧУЖОЙ ТАЙМЕР ЗАМЕНЯЕТ НАШ, А НЕ ВСТАЁТ ВТОРЫМ: таймер тут один на комнату, и
         // два разом означали бы, что «время вышло» не сообщает ничего.
@@ -1557,6 +2030,10 @@ registerProcessor('rnn-denoise', RnnProc);
       }
     });
 
+    // ВОШЁЛ - СПРОСИЛ, ЧТО В КОМНАТЕ УЖЕ ЕСТЬ. Сердцебиение догнало бы и само, но до
+    // пяти секунд перед пустым графиком человек читает как «не работает», а доску
+    // сердцебиение не догоняет вовсе - она слишком большая, чтобы слать её по кругу.
+    setTimeout(function () { try { send({ t: 'ask' }); } catch (e) {} }, 900);
     upsert(room.localParticipant.identity, { name: 'Ты', me: true });
     room.remoteParticipants.forEach(function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
