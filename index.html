@@ -51,18 +51,53 @@
   button.station { display:flex; align-items:center; gap:10px; text-align:left; }
   button.station img { width:26px; height:26px; border-radius:6px; object-fit:cover;
                        flex:0 0 auto; background:#16161c; }
+  /* ТАЙМЕР СТОИТ ТАМ ЖЕ, ГДЕ ИНДИКАТОР ЗАПИСИ, И ПО ТОЙ ЖЕ ПРИЧИНЕ: это состояние ВСЕЙ
+     комнаты, а не кнопка одного человека. Цвет другой - запись и таймер не должны
+     читаться как одно и то же событие. */
+  .tmr { margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#1d2a3a;
+         color:#9ec5ff; font-size:13px; font-weight:600; }
+  .tmr.fin { background:#3a1d20; color:#ff9aa0; }
+  /* РЕАКЦИИ - ОДИН РЯД КРУГЛЫХ КНОПОК, А НЕ СТОЛБИК НА ВСЮ ШИРИНУ: тап по ним идёт
+     посреди разговора, и семь широких кнопок отодвинули бы список людей за экран. */
+  #emos, #snds, #tmrset { display:flex; flex-wrap:wrap; }
+  button.emo { flex:0 0 auto; width:auto; padding:7px 11px; margin:0 6px 6px 0;
+               font-size:19px; line-height:1; background:#25252e; border-radius:999px; }
+  button.snd { flex:0 0 auto; width:auto; padding:7px 11px; margin:0 6px 6px 0;
+               font-size:13px; font-weight:500; background:#25252e; border-radius:999px; }
+  button.pre { flex:0 0 auto; width:auto; padding:8px 12px; margin:0 6px 6px 0;
+               font-size:13px; font-weight:500; background:#25252e; border-radius:999px; }
+  /* ВСПЛЫВАЮЩИЕ РЕАКЦИИ ЖИВУТ НАД НИЖНЕЙ ПОЛОСОЙ И НЕ ЛОВЯТ ТАПЫ (`pointer-events:none`):
+     иначе чужая реакция, пролетающая над кнопкой микрофона, съедала бы нажатие. */
+  #pops { position:fixed; left:0; right:0; bottom:78px; padding:0 14px; display:flex;
+          flex-direction:column; align-items:center; gap:4px; pointer-events:none; z-index:5; }
+  .pop { background:rgba(30,30,38,.94); border-radius:999px; padding:5px 12px; font-size:14px;
+         max-width:92%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+         animation:rise 2.6s ease-out forwards; }
+  @keyframes rise { 0% { opacity:0; transform:translateY(8px); } 12% { opacity:1; transform:none; }
+                    75% { opacity:1; } 100% { opacity:0; transform:translateY(-10px); } }
 </style>
 </head>
 <body>
 <h1 id="title">Голосовая комната</h1>
 <p class="sub" id="sub">Подключаюсь…</p>
 <p id="recbar" class="rec" style="display:none"></p>
+<p id="tmrbar" class="tmr" style="display:none"></p>
 <div class="card" id="people"></div>
 <div id="screens"></div>
 <p id="state"></p>
 
+<!-- РЕАКЦИИ ВЫШЕ СЛУЖЕБНЫХ КНОПОК: по ним тапают посреди чужой реплики, не отводя
+     взгляда от списка людей, а «показать экран» ищут глазами один раз за созвон. -->
+<div class="card" id="react">
+  <div id="emos"></div>
+  <div id="snds"></div>
+  <p class="me" id="reacthint"></p>
+</div>
+
 <div id="tools" class="card">
   <button id="hand" class="wide">✋ Поднять руку</button>
+  <button id="tmr" class="wide">⏱ Таймер</button>
+  <div id="tmrset" style="display:none"></div>
   <button id="show" class="wide" style="display:none"></button>
   <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
   <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
@@ -97,6 +132,8 @@
   <p class="me" id="rnote"></p>
 </div>
 
+<div id="pops"></div>
+
 <div id="bar">
   <button id="mic">🎙 Выключить микрофон</button>
   <button id="out" class="leave">Выйти</button>
@@ -108,7 +145,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'cbb27c3309c2';
+  var VERSION = 'e580f88ce1c3';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -287,6 +324,156 @@
   function upsert(id, patch) {
     people[id] = Object.assign(people[id] || { name: id, speaking: false, muted: false }, patch);
     draw();
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════════════
+  // ЗВУКОВЫЕ РЕАКЦИИ: СИНТЕЗ НА МЕСТЕ + КАНАЛ ДАННЫХ, А НЕ ВТОРАЯ АУДИО-ДОРОЖКА
+  // ═════════════════════════════════════════════════════════════════════════════════
+  // ПОЧЕМУ НЕ ДОРОЖКОЙ, ХОТЯ LiveKit ЭТО УМЕЕТ. У нас на `track_published` висит вебхук,
+  // и бот ДОБИРАЕТ каждую новую аудио-дорожку в идущую запись - ради вошедших позже.
+  // Саундборд, опубликованный дорожкой, попал бы туда же, а бюджет Egress это ТРИ дорожки
+  // на комнату (`track_cpu_cost` 0.5 при `cpus: 2.0`), - то есть каждый «тынц» отнимал бы
+  // место у живого человека, и узнали бы мы об этом по недостающему голосу в транскрипте.
+  // Это механизм, а не вкусовщина.
+  //
+  // ПОЧЕМУ БЕЗ ФАЙЛОВ. Файлы пришлось бы выкладывать ОТДЕЛЬНОЙ командой от страницы, а
+  // два артефакта, уезжающие врозь, у нас уже дважды расходились (страница против
+  // Worker'а, грант показа экрана). Синтез такого класса не имеет вовсе: звук едет тем же
+  // документом, что и кнопка.
+  //
+  // ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ. Смеха нет: голос синтезом не подделать, а «смех», звучащий
+  // как пила, хуже отсутствующей кнопки. Все восемь ниже - ударные и шум, они синтезом
+  // получаются как есть, а не «похоже».
+  var _AC = null, _MASTER = null;
+
+  function actx() {
+    if (!_AC) {
+      var C = window.AudioContext || window.webkitAudioContext;
+      if (!C) return null;
+      try { _AC = new C(); } catch (e) { return null; }
+      _MASTER = _AC.createGain();
+      _MASTER.gain.value = 0.5;
+      _MASTER.connect(_AC.destination);
+    }
+    // БЕЗ ЖЕСТА БРАУЗЕР ДЕРЖИТ КОНТЕКСТ ПРИТОРМОЖЕННЫМ И МОЛЧА. `resume()` зовём без
+    // ожидания: не успел к этому звуку - успеет к следующему, а срывать из-за него ПОКАЗ
+    // реакции нельзя (у сигнала обязано быть два независимых пути дойти).
+    try { if (_AC.state === 'suspended') _AC.resume(); } catch (e) {}
+    return _AC;
+  }
+
+  function noise(ac, sec) {
+    var n = Math.max(1, Math.floor(ac.sampleRate * sec));
+    var b = ac.createBuffer(1, n, ac.sampleRate), d = b.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    return b;
+  }
+
+  //: Шумовой удар: хлопок, щётка, тарелка. `exponentialRamp` в НОЛЬ уходить не умеет -
+  //: отсюда 0.0001, а не 0 (иначе Web Audio молча не применит спад, и звук оборвётся
+  //: щелчком).
+  function burst(ac, t0, dur, gain, type, freq, q) {
+    var s = ac.createBufferSource(); s.buffer = noise(ac, dur + 0.02);
+    var f = ac.createBiquadFilter();
+    f.type = type || 'bandpass'; f.frequency.value = freq || 1200;
+    if (q) f.Q.value = q;
+    var g = ac.createGain();
+    g.gain.setValueAtTime(Math.max(0.0001, gain), t0);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    s.connect(f); f.connect(g); g.connect(_MASTER);
+    s.start(t0); s.stop(t0 + dur + 0.02);
+  }
+
+  //: Тон с атакой и спадом. Атака в 8 мс нужна против щелчка: мгновенный старт с полной
+  //: громкости слышен как треск, а не как нота.
+  function tone(ac, t0, dur, gain, f0, f1, type) {
+    var o = ac.createOscillator(); o.type = type || 'sine';
+    o.frequency.setValueAtTime(f0, t0);
+    if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t0 + dur);
+    var g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0001, gain), t0 + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(_MASTER);
+    o.start(t0); o.stop(t0 + dur + 0.02);
+  }
+
+  // РЕЕСТР ОДИН НА КНОПКУ И НА ПРИЁМНИК: рисуем кнопки из него же, из него же читаем
+  // пришедший id. Два списка разъехались бы, и половина комнаты слышала бы не то, что
+  // написано на кнопке у соседа (закон №40).
+  var SOUNDS = {
+    clap: { e: '👏', t: 'Хлопки', p: function (ac, t) {
+      // ЗАЛ - ЭТО МНОГО КОРОТКИХ ХЛОПКОВ ВРАЗНОБОЙ, а не один длинный шум: ровный шум ухо
+      // слышит как помеху на линии, и «аплодисменты» читались бы как поломка связи.
+      for (var i = 0; i < 46; i++) {
+        burst(ac, t + Math.pow(Math.random(), 0.6) * 1.5, 0.035 + Math.random() * 0.03,
+              0.10 + Math.random() * 0.12, 'bandpass', 900 + Math.random() * 1600, 1.2);
+      }
+    } },
+    drum: { e: '🥁', t: 'Дробь', p: function (ac, t) {
+      var at = t, step = 0.085;
+      while (at < t + 1.25) {
+        burst(ac, at, 0.05, 0.16, 'lowpass', 260, 0);
+        step = Math.max(0.028, step * 0.93);          // дробь РАЗГОНЯЕТСЯ, иначе это метроном
+        at += step;
+      }
+      burst(ac, at + 0.05, 0.22, 0.34, 'lowpass', 220, 0);
+      tone(ac, at + 0.05, 0.25, 0.22, 180, 60, 'sine');
+    } },
+    tyn: { e: '🥁', t: 'Тынц', p: function (ac, t) {
+      tone(ac, t, 0.18, 0.30, 220, 90, 'sine');              // ба-
+      tone(ac, t + 0.17, 0.18, 0.30, 175, 70, 'sine');       // -дум
+      burst(ac, t + 0.34, 0.55, 0.20, 'highpass', 5200, 0);  // -тсс
+    } },
+    bell: { e: '🔔', t: 'Динь', p: function (ac, t) {
+      // Колокол - это НЕСКОЛЬКО обертонов с разным спадом: одна синусоида звучит как
+      // писк из микроволновки.
+      tone(ac, t, 1.10, 0.22, 880, 880, 'sine');
+      tone(ac, t, 0.90, 0.10, 1320, 1320, 'sine');
+      tone(ac, t, 0.60, 0.05, 2640, 2640, 'sine');
+    } },
+    tada: { e: '🎺', t: 'Та-да', p: function (ac, t) {
+      [523, 659, 784].forEach(function (f, i) {
+        tone(ac, t + i * 0.085, 0.14, 0.20, f, f, 'triangle');
+      });
+      tone(ac, t + 0.26, 0.70, 0.24, 1047, 1047, 'triangle');
+    } },
+    buzz: { e: '📢', t: 'Гудок', p: function (ac, t) {
+      tone(ac, t, 0.45, 0.20, 118, 108, 'square');
+    } },
+    pop: { e: '💧', t: 'Поп', p: function (ac, t) {
+      tone(ac, t, 0.11, 0.26, 420, 950, 'sine');
+    } },
+    gong: { e: '⏰', t: 'Гонг', p: function (ac, t) {
+      for (var i = 0; i < 3; i++) tone(ac, t + i * 0.28, 0.22, 0.26, 880, 880, 'sine');
+    } },
+  };
+
+  //: -> сыграл ли. Отвечаем ФАКТОМ, а не намерением: не поднялся контекст - вызывающий
+  //: обязан знать, что человек ничего не услышал, и показать событие глазами.
+  function playSnd(id) {
+    var s = SOUNDS[id];
+    if (!s) return false;
+    var ac = actx();
+    if (!ac) return false;
+    try { s.p(ac, ac.currentTime + 0.02); } catch (e) { return false; }
+    return true;
+  }
+
+  //: СКОЛЬКО РЕАКЦИЙ ВИСИТ НА ЭКРАНЕ РАЗОМ. Без потолка десяток подряд закрыл бы список
+  //: людей целиком - то есть «кто говорит» пропало бы ровно тогда, когда в комнате
+  //: оживлённо.
+  var POP_MAX = 5;
+
+  function popup(txt) {
+    var box = $('pops');
+    if (!box) return;
+    var d = document.createElement('div');
+    d.className = 'pop';
+    d.textContent = txt;
+    box.appendChild(d);
+    while (box.children.length > POP_MAX) box.removeChild(box.firstChild);
+    setTimeout(function () { if (d.parentNode) d.parentNode.removeChild(d); }, 2700);
   }
 
   async function go() {
@@ -995,6 +1182,167 @@ registerProcessor('rnn-denoise', RnnProc);
     $('hush').style.display = '';
     $('hush').onclick = function () { send({ t: 'hush' }); say('Попросил всех приглушиться.'); };
 
+    //: КАК НАС ЗОВУТ ДЛЯ ОСТАЛЬНЫХ. В `people` мы записаны словом «Ты» - его нельзя ни
+    //: рассылать, ни ставить в подпись таймера: у соседа «поставил Ты» не значит ничего.
+    function myLabel() {
+      return human(room.localParticipant.name, room.localParticipant.identity);
+    }
+    function nameOf(p) {
+      var rec = people[p.identity];
+      return (rec && rec.name && !rec.me) ? rec.name : human(p.name, p.identity);
+    }
+
+    // ТЕМП СВОЙ И ЧУЖОЙ СЧИТАЮТСЯ ОТДЕЛЬНО, И ЭТО НЕ ПЕРЕСТРАХОВКА. Свой бережёт соседей
+    // от нашей же залипшей кнопки; чужой бережёт НАС от того, у кого она залипла, - и
+    // одним счётчиком это не закрыть, потому что у них разные владельцы.
+    var lastReact = 0, lastFrom = {};
+    function canReact() {
+      var now = Date.now();
+      if (now - lastReact < 600) return false;
+      lastReact = now;
+      return true;
+    }
+    function floodOk(id) {
+      var now = Date.now();
+      if (now - (lastFrom[id] || 0) < 600) return false;
+      lastFrom[id] = now;
+      return true;
+    }
+
+    // ═══ ЭМОДЗИ-РЕАКЦИИ: ТОЛЬКО КАНАЛ ДАННЫХ, НИ БАЙТА ЗВУКА ═══
+    // Реакция обязана работать и у того, кто молчит с выключенным микрофоном, и у
+    // веб-гостя без Telegram: ящик бота тут не участвует вовсе, поэтому и гейта нет.
+    ['👍', '❤️', '😂', '🔥', '🤔', '😮', '🙏', '🎉'].forEach(function (e) {
+      var b = document.createElement('button');
+      b.className = 'emo';
+      b.textContent = e;
+      b.onclick = function () {
+        if (!canReact()) return;
+        popup('Ты  ' + e);
+        send({ t: 'react', e: e });
+      };
+      $('emos').appendChild(b);
+    });
+
+    Object.keys(SOUNDS).forEach(function (id) {
+      var s = SOUNDS[id];
+      var b = document.createElement('button');
+      b.className = 'snd';
+      b.textContent = s.e + ' ' + s.t;
+      b.onclick = function () {
+        if (!canReact()) return;
+        // ЗВУК ИГРАЕТ И У ОТПРАВИТЕЛЯ. Иначе он не знает, сработала ли кнопка, жмёт
+        // второй раз - и у остальных играет дважды.
+        playSnd(id);
+        popup('Ты  ' + s.e + ' ' + s.t);
+        send({ t: 'snd', s: id });
+      };
+      $('snds').appendChild(b);
+    });
+    // ГРАНИЦА НАЗЫВАЕТСЯ СРАЗУ: звук идёт каналом данных, а пишется МИКРОФОН. Человек,
+    // который «поставил аплодисменты в запись», узнал бы об этом только из транскрипта.
+    $('reacthint').textContent = 'Слышат все, кто сейчас в комнате. В запись реакции не '
+      + 'попадают: они идут отдельным каналом, а не через микрофон.';
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ТАЙМЕР: ПЕРЕДАЁМ ОСТАТОК, А НЕ МОМЕНТ КОНЦА
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // Часы у телефонов расходятся на минуты, и абсолютная метка показала бы одному
+    // «осталось 4:59», другому «время вышло» - причём выглядело бы это как наш баг.
+    // Остаток от расхождения часов не зависит вовсе: каждый считает СВОЙ дедлайн от
+    // своего же «сейчас», а задержка канала данных (десятки миллисекунд) для
+    // пятиминутного таймера не значит ничего.
+    var tmrEnd = 0, tmrBy = '', tmrTick = null, tmrBeat = null, tmrFired = false;
+
+    function stopTmrLoop() { if (tmrTick) { clearInterval(tmrTick); tmrTick = null; } }
+    function stopBeat() { if (tmrBeat) { clearInterval(tmrBeat); tmrBeat = null; } }
+    function tmrMenu(on) { $('tmrset').style.display = on ? '' : 'none'; }
+
+    function tmrPaint() {
+      var bar = $('tmrbar');
+      if (!tmrEnd) { bar.style.display = 'none'; bar.className = 'tmr'; return; }
+      var left = Math.max(0, Math.round((tmrEnd - Date.now()) / 1000));
+      bar.style.display = '';
+      if (left > 0) {
+        bar.className = 'tmr';
+        bar.textContent = '⏱ ' + Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2)
+          + (tmrBy ? ' · поставил ' + tmrBy : '');
+        return;
+      }
+      bar.className = 'tmr fin';
+      bar.textContent = '⏱ Время вышло' + (tmrBy ? ' · таймер ' + tmrBy : '');
+      if (tmrFired) return;
+      tmrFired = true;
+      stopTmrLoop();
+      stopBeat();
+      $('tmr').classList.remove('on');
+      // У КОНЦА ТАЙМЕРА ДВА НЕЗАВИСИМЫХ СПОСОБА ДОЙТИ. Звук может не сыграть вовсе -
+      // браузер держит аудио-контекст, пока человек ничего не нажимал, - и тогда
+      // единственным сигналом остаётся строка. Полагаться на один было бы обещанием.
+      playSnd('gong');
+      popup('⏰ Время вышло');
+      // СТРОКА ГАСНЕТ САМА, НО НЕ СРАЗУ: тот, кто смотрел в другое окно, обязан успеть
+      // её увидеть.
+      setTimeout(function () {
+        if (!tmrFired) return;
+        tmrEnd = 0;
+        tmrPaint();
+      }, 15000);
+    }
+
+    //: mine=true - таймер ставим МЫ, значит на нас же сердцебиение.
+    function tmrSet(sec, by, mine) {
+      stopTmrLoop();
+      stopBeat();
+      tmrFired = false;
+      if (!(sec > 0)) {                       // ноль и меньше - снятие
+        tmrEnd = 0;
+        tmrBy = '';
+        $('tmr').classList.remove('on');
+        tmrPaint();
+        return;
+      }
+      tmrEnd = Date.now() + sec * 1000;
+      tmrBy = by || '';
+      $('tmr').classList.add('on');
+      tmrTick = setInterval(tmrPaint, 500);
+      tmrPaint();
+      if (!mine) return;
+      // СЕРДЦЕБИЕНИЕ - РАДИ ВОШЕДШИХ ПОЗЖЕ. Канал данных доставляет только тем, кто уже в
+      // комнате: без повтора человек, зашедший на второй минуте, не увидел бы таймера
+      // ВООБЩЕ (тот же класс, что рассылка признака записи вместо метаданных комнаты).
+      // ЧЕСТНАЯ ГРАНИЦА: уйдёт поставивший - повтор прекратится, но у тех, кто уже
+      // получил остаток, таймер досчитает и прозвонит сам; не увидят его только те, кто
+      // войдёт ПОСЛЕ его ухода.
+      tmrBeat = setInterval(function () {
+        var left = Math.round((tmrEnd - Date.now()) / 1000);
+        if (left <= 0) { stopBeat(); return; }
+        send({ t: 'tmr', left: left, by: myLabel() });
+      }, 5000);
+    }
+
+    [1, 3, 5, 10, 15].forEach(function (mm) {
+      var b = document.createElement('button');
+      b.className = 'pre';
+      b.textContent = mm + ' мин';
+      b.onclick = function () {
+        tmrMenu(false);
+        tmrSet(mm * 60, 'Ты', true);
+        send({ t: 'tmr', left: mm * 60, by: myLabel() });
+      };
+      $('tmrset').appendChild(b);
+    });
+    var tmrOff = document.createElement('button');
+    tmrOff.className = 'pre';
+    tmrOff.textContent = '⏹ Снять';
+    tmrOff.onclick = function () {
+      tmrMenu(false);
+      tmrSet(0);
+      send({ t: 'tmr', left: 0 });
+    };
+    $('tmrset').appendChild(tmrOff);
+    $('tmr').onclick = function () { tmrMenu($('tmrset').style.display === 'none'); };
+
     // ═══ ЗАПИСЬ: КНОПКА ЖМЁТ БОТА, А НЕ LIVEKIT ═══
     // Ключом от Egress владеет БОТ - он же потом идёт за файлами и сшивает транскрипт.
     // Дай мы это право странице или Worker'у, ответ на вопрос «кто управляет записью»
@@ -1178,6 +1526,28 @@ registerProcessor('rnn-denoise', RnnProc);
       try { m = JSON.parse(new TextDecoder().decode(payload)); } catch (e) { return; }
       if (!m || !m.t) return;
       if (m.t === 'hand' && p) upsert(p.identity, { hand: m.up ? Date.now() : 0 });
+      if (m.t === 'react' && p && floodOk(p.identity)) {
+        // ЭМОДЗИ РЕЖЕМ ПО ДЛИНЕ: в поле приходит строка от клиента, и «реакцией» на
+        // килобайт текста можно было бы закрыть соседу пол-экрана.
+        popup(nameOf(p) + '  ' + String(m.e || '').slice(0, 8));
+      }
+      if (m.t === 'snd' && p && floodOk(p.identity)) {
+        var _s = SOUNDS[m.s];
+        if (_s) {
+          playSnd(m.s);
+          popup(nameOf(p) + '  ' + _s.e + ' ' + _s.t);
+        } else {
+          // ЗВУК, КОТОРОГО МЫ НЕ ЗНАЕМ, - ЭТО СТАРАЯ СТРАНИЦА У НАС, А НЕ ошибка соседа.
+          // Молча проглотить нельзя: у него играет, у нас тихо, и он решит, что сломался
+          // микрофон, - то есть пойдёт чинить исправное.
+          popup(nameOf(p) + '  🔊 звук из новой версии - обнови страницу');
+        }
+      }
+      if (m.t === 'tmr') {
+        // ЧУЖОЙ ТАЙМЕР ЗАМЕНЯЕТ НАШ, А НЕ ВСТАЁТ ВТОРЫМ: таймер тут один на комнату, и
+        // два разом означали бы, что «время вышло» не сообщает ничего.
+        tmrSet(Number(m.left) || 0, (p ? nameOf(p) : (m.by || '')), false);
+      }
       if (m.t === 'hush') {
         micOn = false;
         try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
