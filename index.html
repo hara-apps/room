@@ -105,6 +105,14 @@
   input.tin::placeholder { color:var(--mut); }
   /* ОЧЕРЕДЬ ВОПРОСОВ. Номер слева - это ПОРЯДОК, в котором до них дойдут, поэтому он
      считается по голосам, а не по времени прихода. */
+  /* ДЕЙСТВИЯ НАД УЧАСТНИКОМ. Три точки справа, меню разворачивается ПОД строкой - так
+     видно, к КОМУ оно относится; всплывающее поверх списка накрывало бы соседей. */
+  .p .more { flex:0 0 auto; width:auto; padding:4px 9px; margin:0; font-size:15px;
+             line-height:1; background:transparent; color:var(--mut); font-weight:700; }
+  .pact { padding:2px 0 8px 19px; }
+  .pact button { width:auto; padding:6px 10px; margin:0 6px 6px 0; font-size:12px;
+                 font-weight:500; background:#25252e; border-radius:999px; }
+  .pact .me { margin:2px 0 0; }
   #amalist { max-height:38vh; overflow-y:auto; }
   .q { display:flex; align-items:flex-start; gap:8px; padding:7px 0; }
   .q .qn { flex:0 0 auto; color:var(--mut); font-size:12px; min-width:16px; padding-top:3px; }
@@ -256,7 +264,7 @@
   var tg = (window.Telegram || {}).WebApp;
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '7e38396b73b3';
+  var VERSION = 'd6d1871fe877';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -348,6 +356,107 @@
   //: (до подключения), и лента субтитров (после). Объявление в комнате давало
   //: `ReferenceError` у того, кто вошёл в комнату с УЖЕ включёнными субтитрами, - и
   //: уносило всё, что регистрируется ниже, включая объяснение для веб-гостя.
+  // ═══ ЗВУК КОМНАТЫ ЖИВЁТ ТАМ ЖЕ, ГДЕ `showRec`, И ЭТО НЕСУЩАЯ КОНСТРУКЦИЯ ═══
+  // ТРЕТИЙ РАЗ ОДИН КЛАСС ЗА ДВА ДНЯ. `showRec` читает состояние комнаты и вызывается ДО
+  // подключения (метаданные приезжают вместе с входом). Всё, что он зовёт, обязано быть
+  // объявлено ЗДЕСЬ: `subSticky` и `subNote` внутри комнаты давали `ReferenceError` и
+  // уносили полстраницы, а `dropDj` внутри комнаты просто НЕ ВЫЗЫВАЛСЯ - я даже прикрыл
+  // его `typeof dropDj === 'function'`, и проверка молча возвращала false. Такой guard
+  // ХУЖЕ падения: он превращает поломку в тишину, а тишина здесь означает «у нажавшего
+  // радио продолжает играть». Guard снят, объявления переехали.
+  // ═══════════════ ГРОМКОСТЬ РАДИО ═══════════════
+  // РАДИО - ФОН ПОД РАЗГОВОР, И ЭТО ЕГО СМЫСЛ, А НЕ НАСТРОЙКА ПО ВКУСУ. Вровень с
+  // голосами оно мешает ровно тому, ради чего люди собрались.
+  // ПОЧЕМУ КЛИЕНТСКАЯ СТОРОНА: у LiveKit громкость чужой дорожки живёт у СЛУШАТЕЛЯ
+  // (`RemoteAudioTrack.setVolume`), серверной ручки «этому участнику тише» нет вовсе - и
+  // правильно, что нет: одному фон мешает, другому нет, и решать это за всех нельзя.
+  var DJ_ID = 'bot-dj';                 // identity бота-диджея, тот же, что в rtc_dj.py
+  var DJ_VOL_DEFAULT = 25;              // проценты: заметно тише голоса (условие Ren)
+  var djTrack = null;
+  var djVol = DJ_VOL_DEFAULT;
+  try {
+      // ВЫБОР ЧЕЛОВЕКА ПЕРЕЖИВАЕТ ПЕРЕОТКРЫТИЕ: комнату открывают по несколько раз за
+      // созвон, и каждый раз двигать ползунок заново - это работа, переложенная на него.
+      var _sv = localStorage.getItem('rtc_dj_vol');
+      if (_sv !== null && _sv !== '') djVol = Math.max(0, Math.min(100, parseInt(_sv, 10) || 0));
+  } catch (e) { }
+
+  function isDj(p) {
+      return !!p && String(p.identity || '') === DJ_ID;
+  }
+
+  //: ЧТО МЫ ПРИКРЕПИЛИ К СТРАНИЦЕ, ТО МЫ ОБЯЗАНЫ И СНЯТЬ. `track.attach()` создаёт
+  //: <audio>, и до этой правки он оставался в DOM НАВСЕГДА: снималась подписка, гас
+  //: ползунок, а элемент продолжал жить. Живой отказ Ren (третий раз): «выключил радио -
+  //: у остальных пропало, у меня играет». Осиротевший элемент - единственный механизм на
+  //: клиенте, который даёт звук ПОСЛЕ того, как дорожки уже нет; заодно повторная
+  //: подписка на ту же дорожку плодила ВТОРОЙ элемент, то есть двойной звук.
+  var attached = {};                    // sid -> [элементы]
+
+  function attachTrack(track) {
+      var sid = String(track.sid || ('x' + Math.random()));
+      detachTrack(track);               // второй элемент на ту же дорожку - двойной звук
+      var el = track.attach();
+      el.setAttribute('playsinline', '');
+      el.style.display = 'none';
+      document.body.appendChild(el);
+      attached[sid] = (attached[sid] || []).concat([el]);
+      return el;
+  }
+
+  function detachTrack(track) {
+      if (!track) return 0;
+      var sid = String(track.sid || '');
+      var n = 0;
+      // ЗОВЁМ И РОДНОЙ `detach` SDK, И УБИРАЕМ ИЗ DOM САМИ. Одного `detach` мало: он
+      // отвязывает поток, но элемент остаётся, и браузер вправе доиграть буфер.
+      try {
+          (track.detach ? (track.detach() || []) : []).forEach(function (e) {
+              if (e && e.remove) { e.remove(); n++; }
+          });
+      } catch (e) {}
+      (attached[sid] || []).forEach(function (e) {
+          try { e.pause(); } catch (e2) {}
+          try { e.srcObject = null; } catch (e2) {}
+          if (e && e.remove) { e.remove(); n++; }
+      });
+      delete attached[sid];
+      return n;
+  }
+
+  function dropDj() {
+      // ВЫКЛЮЧЕНИЕ РАДИО - СОСТОЯНИЕ КОМНАТЫ, А НЕ СОБЫТИЕ ПОДПИСКИ. `TrackUnsubscribed`
+      // может не прийти вовсе (процесс убит, соединение оборвалось), а признак `dj` в
+      // метаданных приходит ВСЕМ и ВСЕГДА - на него и опираемся.
+      detachTrack(djTrack);
+      djTrack = null;
+      showDjVol(false);
+  }
+
+  function applyDjVolume() {
+      if (!djTrack || !djTrack.setVolume) return false;
+      try { djTrack.setVolume(djVol / 100); return true; } catch (e) { return false; }
+  }
+
+  function showDjVol(on) {
+      var box = $('djvol');
+      if (!box) return;
+      box.style.display = on ? '' : 'none';
+      if (!on) return;
+      var sl = $('djv');
+      sl.value = String(djVol);
+      $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
+      sl.oninput = function () {
+          djVol = parseInt(sl.value, 10) || 0;
+          $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
+          // ПРИМЕНЯЕМ СРАЗУ, А НЕ ПО ОТПУСКАНИЮ: человек ведёт ползунок и слушает, что
+          // получается, - иначе он подбирает значение вслепую.
+          applyDjVolume();
+          try { localStorage.setItem('rtc_dj_vol', String(djVol)); } catch (e) { }
+      };
+  }
+
+
   function subNote(txt, sticky) {
     $('subbox').style.display = '';
     $('subnote').textContent = txt || '';
@@ -398,7 +507,13 @@
     // ВЫКЛЮЧИЛИ СУБТИТРЫ - СНИМАЕМ И ЛИПКОЕ ИЗВЕСТИЕ: оно относилось к прошлому запуску,
     // и «бюджет исчерпан» над выключённой лентой отвечает не на тот вопрос.
     if (!subOn) subSticky = false;
+    var _wasDj = djOn;
     djOn = !!(m && m.dj);
+    // ПРИЗНАК СНЯЛИ - СНИМАЕМ И ЗВУК, НЕ ДОЖИДАЯСЬ СОБЫТИЯ ПОДПИСКИ. Именно у того, кто
+    // НАЖАЛ «выключить», событие может не прийти: его страница в этот момент занята кругом
+    // через ящик, а процесс на песочнице уже убит. Остальные тем временем замолкают по
+    // `TrackUnsubscribed` - отсюда и «у всех пропало, у меня играет».
+    if (_wasDj && !djOn) dropDj();
     var d = $('dj');
     if (d.style.display !== 'none') {
       d.classList.toggle('on', djOn);
@@ -439,8 +554,73 @@
         + (pos >= 0 ? '<span class="hand">✋ ' + (pos + 1) + '</span> ' : '')
         + '<span class="me">' + (p.me ? 'ты' : (p.muted ? 'микрофон выкл' : '')) + '</span>';
       row.querySelector('.nm').textContent = p.name;
+      // ═══ ДЕЙСТВИЯ НАД УЧАСТНИКОМ ═══
+      // СВОЯ СТРОКА ИХ НЕ ПОЛУЧАЕТ: «заглушить себя» это кнопка микрофона внизу, и второй
+      // способ сделать то же самое разошёлся бы с ней при первой правке.
+      if (!p.me) {
+        var more = document.createElement('button');
+        more.className = 'more';
+        more.textContent = '⋯';
+        more.onclick = function () {
+          pactFor = (pactFor === id) ? '' : id;
+          draw();
+        };
+        row.appendChild(more);
+      }
       box.appendChild(row);
+      if (pactFor === id && !p.me) box.appendChild(pactRow(id, p));
     });
+  }
+
+  //: ЧЬЁ МЕНЮ ДЕЙСТВИЙ СЕЙЧАС РАСКРЫТО. Одно на список: два раскрытых разом означали бы,
+  //: что человек не видит, к кому относится кнопка, которую он вот-вот нажмёт.
+  var pactFor = '';
+
+  function pactRow(id, p) {
+    var box = document.createElement('div');
+    box.className = 'pact';
+    var isRadio = (id === DJ_ID);
+    if (isRadio) {
+      // ═══ РАДИО - НЕ ЧЕЛОВЕК, И ЗДЕСЬ ДЕЙСТВИЕ НАСТОЯЩЕЕ ═══
+      // Процессом владеет БОТ, значит «отсоединить» это не просьба, а команда: тот же
+      // путь, что у кнопки «Выключить радио», и второй дороги мы не заводим (закон №40).
+      var off = document.createElement('button');
+      off.textContent = '⏹ Отсоединить радио';
+      off.onclick = function () {
+        pactFor = ''; draw();
+        var b = $('dj');
+        if (b && b.onclick) b.onclick();
+        else say('Выключить радио отсюда не вышло - жми кнопку «Выключить радио».', true);
+      };
+      box.appendChild(off);
+      var nt = document.createElement('p');
+      nt.className = 'me';
+      nt.textContent = 'Радио - мой процесс, поэтому это настоящая команда, а не просьба.';
+      box.appendChild(nt);
+      return box;
+    }
+    [['🔇 Попросить приглушиться', 'quiet'],
+     ['🚪 Попросить выйти', 'bye']].forEach(function (a) {
+      var b = document.createElement('button');
+      b.textContent = a[0];
+      b.onclick = function () {
+        pactFor = ''; draw();
+        send({ t: 'ask1', to: id, do: a[1], by: myLabel() });
+        say('Отправил ' + p.name + ': ' + (a[1] === 'quiet' ? 'приглушиться' : 'выйти')
+            + '. Это просьба - решает он.');
+      };
+      box.appendChild(b);
+    });
+    // ═══ ЧЕСТНО ПРО ГРАНИЦУ, А НЕ МОЛЧА ═══
+    // Серверного «замолчи» мы не шлём: для него нужен админский грант У КАЖДОГО, то есть
+    // право выключать чужой микрофон кому угодно. Подпись, обещающая приказ там, где
+    // отправлена просьба, хуже отсутствующей кнопки - человек решит, что сломалось.
+    var note = document.createElement('p');
+    note.className = 'me';
+    note.textContent = 'Это ПРОСЬБЫ: у него всплывёт окно, и он решает сам. Выключить '
+      + 'чужой микрофон или выставить из комнаты я не умею - и не хочу уметь.';
+    box.appendChild(note);
+    return box;
   }
 
   // ИМЯ ЧЕЛОВЕКА, А НЕ ЕГО TELEGRAM-ID. Токен несёт `name` из подписи, но у токена,
@@ -497,7 +677,11 @@
       if (!C) return null;
       try { _AC = new C(); } catch (e) { return null; }
       _MASTER = _AC.createGain();
-      _MASTER.gain.value = 0.5;
+      // ═══ УРОВЕНЬ: 0.5 БЫЛО ТИХО, И ЭТО ЖИВОЙ ОТЗЫВ, А НЕ ВКУС ═══
+      // Реакция звучит ПОВЕРХ разговора, у которого своя громкость, - и «гонг и остальные
+      // очень тихие» означает, что её просто не слышно. Ставим 1.0 и держим пики у
+      // источников: общий множитель ниже единицы отнимал половину у КАЖДОГО звука разом.
+      _MASTER.gain.value = 1.0;
       _MASTER.connect(_AC.destination);
     }
     // БЕЗ ЖЕСТА БРАУЗЕР ДЕРЖИТ КОНТЕКСТ ПРИТОРМОЖЕННЫМ И МОЛЧА. `resume()` зовём без
@@ -548,11 +732,14 @@
   // написано на кнопке у соседа (закон №40).
   var SOUNDS = {
     clap: { e: '👏', t: 'Хлопки', p: function (ac, t) {
-      // ЗАЛ - ЭТО МНОГО КОРОТКИХ ХЛОПКОВ ВРАЗНОБОЙ, а не один длинный шум: ровный шум ухо
-      // слышит как помеху на линии, и «аплодисменты» читались бы как поломка связи.
-      for (var i = 0; i < 46; i++) {
-        burst(ac, t + Math.pow(Math.random(), 0.6) * 1.5, 0.035 + Math.random() * 0.03,
-              0.10 + Math.random() * 0.12, 'bandpass', 900 + Math.random() * 1600, 1.2);
+      // ═══ ПОЧЕМУ ПРЕЖНИЙ ЗВУЧАЛ КАК ПИСК (живой отзыв Ren) ═══
+      // `bandpass` c Q=1.2 на 35-миллисекундном шуме - это РЕЗОНАТОР: фильтр звенит на
+      // своей частоте, и ухо слышит не удар, а короткий тон. Настоящий хлопок
+      // ШИРОКОПОЛОСНЫЙ (от пары сотен герц до восьми килогерц) и гаснет за 30-60 мс.
+      // Поэтому здесь `highpass` без добротности: он режет гул, но НЕ звенит.
+      for (var i = 0; i < 34; i++) {
+        burst(ac, t + Math.pow(Math.random(), 0.55) * 1.25, 0.03 + Math.random() * 0.035,
+              0.30 + Math.random() * 0.25, 'highpass', 320 + Math.random() * 380, 0);
       }
     } },
     drum: { e: '🥁', t: 'Дробь', p: function (ac, t) {
@@ -573,26 +760,60 @@
     bell: { e: '🔔', t: 'Динь', p: function (ac, t) {
       // Колокол - это НЕСКОЛЬКО обертонов с разным спадом: одна синусоида звучит как
       // писк из микроволновки.
-      tone(ac, t, 1.10, 0.22, 880, 880, 'sine');
-      tone(ac, t, 0.90, 0.10, 1320, 1320, 'sine');
+      tone(ac, t, 1.10, 0.34, 880, 880, 'sine');
+      tone(ac, t, 0.90, 0.16, 1320, 1320, 'sine');
       tone(ac, t, 0.60, 0.05, 2640, 2640, 'sine');
     } },
     tada: { e: '🎺', t: 'Та-да', p: function (ac, t) {
       [523, 659, 784].forEach(function (f, i) {
-        tone(ac, t + i * 0.085, 0.14, 0.20, f, f, 'triangle');
+        tone(ac, t + i * 0.085, 0.14, 0.30, f, f, 'triangle');
       });
-      tone(ac, t + 0.26, 0.70, 0.24, 1047, 1047, 'triangle');
+      tone(ac, t + 0.26, 0.70, 0.34, 1047, 1047, 'triangle');
     } },
     buzz: { e: '📢', t: 'Гудок', p: function (ac, t) {
-      tone(ac, t, 0.45, 0.20, 118, 108, 'square');
+      tone(ac, t, 0.45, 0.28, 118, 108, 'square');
     } },
     pop: { e: '💧', t: 'Поп', p: function (ac, t) {
-      tone(ac, t, 0.11, 0.26, 420, 950, 'sine');
+      tone(ac, t, 0.11, 0.38, 420, 950, 'sine');
     } },
     gong: { e: '⏰', t: 'Гонг', p: function (ac, t) {
-      for (var i = 0; i < 3; i++) tone(ac, t + i * 0.28, 0.22, 0.26, 880, 880, 'sine');
+      // ТРИ ОДИНАКОВЫХ СИНУСА ПОДРЯД - ЭТО БУДИЛЬНИК, А НЕ ГОНГ. У гонга ОДИН удар с
+      // неровными обертонами и длинным хвостом; удар начинается шумом (било о металл),
+      // дальше остаётся звон.
+      burst(ac, t, 0.06, 0.34, 'lowpass', 1800, 0);
+      [110, 164, 233, 311, 415].forEach(function (f, i) {
+        tone(ac, t, 2.6 - i * 0.35, 0.30 / (i + 1.4), f, f * 0.995, 'sine');
+      });
     } },
   };
+
+  // ═══ ГОТОВЫЙ СЭМПЛ СИЛЬНЕЕ СИНТЕЗА, И ЭТО РЕШЕНИЕ REN ═══
+  // «Хлопки звучат как писк, гонг тихий - синтез не справляется». Он и не справится:
+  // хлопок это запись комнаты, а не осциллятор. Поэтому рядом со страницей может лежать
+  // `snd/<id>.ogg`, и он ВЫИГРЫВАЕТ у синтеза.
+  // МАНИФЕСТ, А НЕ ПРОБА КАЖДОГО ФАЙЛА: восемь HEAD-запросов на открытие комнаты ради
+  // «а есть ли» - это восемь лишних кругов и восемь способов ошибиться. `deploy_room`
+  // собирает список из КАТАЛОГА, то есть по факту наличия, а не по нашей памяти.
+  // ФАЙЛОВ МОЖЕТ НЕ БЫТЬ ВОВСЕ - тогда работает то, что есть, и ничего не ломается.
+  var SND_BUF = {};                 // id -> AudioBuffer (или null, если не вышло)
+  var SND_FILES = null;             // список id, для которых файл ЕСТЬ
+
+  function sndManifest() {
+    if (SND_FILES !== null) return Promise.resolve(SND_FILES);
+    return fetch('snd/index.json', { cache: 'no-cache' })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .catch(function () { return []; })
+      .then(function (j) { SND_FILES = Array.isArray(j) ? j : []; return SND_FILES; });
+  }
+
+  function sndLoad(ac, id) {
+    if (SND_BUF[id] !== undefined) return Promise.resolve(SND_BUF[id]);
+    return fetch('snd/' + id + '.ogg')
+      .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(0); })
+      .then(function (b) { return ac.decodeAudioData(b); })
+      .then(function (buf) { SND_BUF[id] = buf; return buf; })
+      .catch(function () { SND_BUF[id] = null; return null; });
+  }
 
   //: -> сыграл ли. Отвечаем ФАКТОМ, а не намерением: не поднялся контекст - вызывающий
   //: обязан знать, что человек ничего не услышал, и показать событие глазами.
@@ -601,6 +822,27 @@
     if (!s) return false;
     var ac = actx();
     if (!ac) return false;
+    if (SND_BUF[id]) {
+      try {
+        var src = ac.createBufferSource();
+        src.buffer = SND_BUF[id];
+        src.connect(_MASTER);
+        src.start(ac.currentTime + 0.02);
+        return true;
+      } catch (e) { /* дальше синтезом */ }
+    }
+    if (SND_FILES && SND_FILES.indexOf(id) >= 0 && SND_BUF[id] === undefined) {
+      // ФАЙЛ ЕСТЬ, НО ЕЩЁ НЕ ЗАГРУЖЕН: тянем и играем, когда приедет. Ждать его молча
+      // нельзя - человек тапнул и обязан услышать хоть что-то в эту же секунду.
+      sndLoad(ac, id).then(function (b) {
+        if (!b) return;
+        try {
+          var s2 = ac.createBufferSource();
+          s2.buffer = b; s2.connect(_MASTER); s2.start(ac.currentTime + 0.01);
+        } catch (e) {}
+      });
+    }
+    if (!s.p) return SND_BUF[id] !== undefined;
     try { s.p(ac, ac.currentTime + 0.02); } catch (e) { return false; }
     return true;
   }
@@ -677,62 +919,18 @@
     // identity с `undefined`, громкость не ставилась бы вовсе, и выглядело бы это
     // как «ползунок не работает». Тот же класс, что подпись кнопки записи, которая
     // зависела от порядка строк, а не от состояния.
-    // ═══════════════ ГРОМКОСТЬ РАДИО ═══════════════
-    // РАДИО - ФОН ПОД РАЗГОВОР, И ЭТО ЕГО СМЫСЛ, А НЕ НАСТРОЙКА ПО ВКУСУ. Вровень с
-    // голосами оно мешает ровно тому, ради чего люди собрались.
-    // ПОЧЕМУ КЛИЕНТСКАЯ СТОРОНА: у LiveKit громкость чужой дорожки живёт у СЛУШАТЕЛЯ
-    // (`RemoteAudioTrack.setVolume`), серверной ручки «этому участнику тише» нет вовсе - и
-    // правильно, что нет: одному фон мешает, другому нет, и решать это за всех нельзя.
-    var DJ_ID = 'bot-dj';                 // identity бота-диджея, тот же, что в rtc_dj.py
-    var DJ_VOL_DEFAULT = 25;              // проценты: заметно тише голоса (условие Ren)
-    var djTrack = null;
-    var djVol = DJ_VOL_DEFAULT;
-    try {
-        // ВЫБОР ЧЕЛОВЕКА ПЕРЕЖИВАЕТ ПЕРЕОТКРЫТИЕ: комнату открывают по несколько раз за
-        // созвон, и каждый раз двигать ползунок заново - это работа, переложенная на него.
-        var _sv = localStorage.getItem('rtc_dj_vol');
-        if (_sv !== null && _sv !== '') djVol = Math.max(0, Math.min(100, parseInt(_sv, 10) || 0));
-    } catch (e) { }
-
-    function isDj(p) {
-        return !!p && String(p.identity || '') === DJ_ID;
-    }
-
-    function applyDjVolume() {
-        if (!djTrack || !djTrack.setVolume) return false;
-        try { djTrack.setVolume(djVol / 100); return true; } catch (e) { return false; }
-    }
-
-    function showDjVol(on) {
-        var box = $('djvol');
-        if (!box) return;
-        box.style.display = on ? '' : 'none';
-        if (!on) return;
-        var sl = $('djv');
-        sl.value = String(djVol);
-        $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
-        sl.oninput = function () {
-            djVol = parseInt(sl.value, 10) || 0;
-            $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
-            // ПРИМЕНЯЕМ СРАЗУ, А НЕ ПО ОТПУСКАНИЮ: человек ведёт ползунок и слушает, что
-            // получается, - иначе он подбирает значение вслепую.
-            applyDjVolume();
-            try { localStorage.setItem('rtc_dj_vol', String(djVol)); } catch (e) { }
-        };
-    }
-
     room.on(LK.RoomEvent.ParticipantConnected, function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
     });
     room.on(LK.RoomEvent.ParticipantDisconnected, function (p) {
-      if (isDj(p)) { djTrack = null; showDjVol(false); }
+      if (isDj(p)) dropDj();
       delete people[p.identity]; draw();
     });
     room.on(LK.RoomEvent.TrackUnsubscribed, function (track, _pub2, p2) {
       if (track.kind === 'audio') {
         // РАДИО ВЫКЛЮЧИЛИ - ПОЛЗУНОК УХОДИТ ВМЕСТЕ С НИМ. Регулятор громкости того, чего
         // не играет, читается как «сломано»: человек двигает его и ничего не происходит.
-        if (isDj(p2) || track === djTrack) { djTrack = null; showDjVol(false); }
+        if (isDj(p2) || track === djTrack) dropDj(); else detachTrack(track);
         return;
       }
       if (track.kind !== 'video') return;
@@ -757,10 +955,7 @@
       if (track.kind === 'audio') {
         // ЗВУК ИГРАЕТ ЭЛЕМЕНТОМ, КОТОРЫЙ МЫ ДЕРЖИМ САМИ: на iOS элемент, не привязанный к
         // DOM, браузер вправе выгрузить, и участник замолкает без единой ошибки.
-        var el = track.attach();
-        el.setAttribute('playsinline', '');
-        el.style.display = 'none';
-        document.body.appendChild(el);
+        attachTrack(track);
         // ═══ РАДИО ИГРАЕТ ФОНОМ, А НЕ ВРОВЕНЬ С ГОЛОСАМИ ═══
         // Живой прогон Ren: «мы делали радио, чтобы играло ФОНОМ под разговор - тихо».
         // Громкость КЛИЕНТСКАЯ и у каждого своя: серверной ручки «сделай этому участнику
@@ -2476,6 +2671,29 @@ registerProcessor('rnn-denoise', RnnProc);
         // ЧУЖОЙ ТАЙМЕР ЗАМЕНЯЕТ НАШ, А НЕ ВСТАЁТ ВТОРЫМ: таймер тут один на комнату, и
         // два разом означали бы, что «время вышло» не сообщает ничего.
         tmrSet(Number(m.left) || 0, (p ? nameOf(p) : (m.by || '')), false);
+      }
+      if (m.t === 'ask1' && p) {
+        // ═══ АДРЕСНАЯ ПРОСЬБА: ЕЁ ИСПОЛНЯЕТ ТОТ, КОМУ ОНА АДРЕСОВАНА ═══
+        // Поле `to` приходит от клиента и ничего не доказывает - поэтому проверяем МЫ, у
+        // себя: чужую просьбу просто не исполняем. Иначе один человек глушил бы всю
+        // комнату одним сообщением (закон №32 на стороне получателя).
+        if (String(m.to || '') !== room.localParticipant.identity) return;
+        var _who = nameOf(p);
+        if (m.do === 'quiet') {
+          micOn = false;
+          try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
+          $('mic').textContent = '🎙 Включить микрофон';
+          $('mic').classList.add('off');
+          say(_who + ' попросил тебя приглушиться - микрофон выключен. Включить можно '
+              + 'кнопкой внизу.');
+        } else if (m.do === 'bye') {
+          // ВЫХОД - РЕШЕНИЕ ЧЕЛОВЕКА, А НЕ ЧУЖОЙ ТАП. Выкинуть его молча значило бы дать
+          // любому участнику право отключать соседей, а такого права мы не выдавали.
+          say(_who + ' просит тебя выйти из комнаты. Решаешь ты - кнопка «Выйти» справа '
+              + 'внизу.', true);
+          popup('🚪 ' + _who + ' просит тебя выйти');
+        }
+        return;
       }
       if (m.t === 'hush') {
         micOn = false;
