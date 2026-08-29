@@ -344,7 +344,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '87c2d81f74ce';
+  var VERSION = 'cf45a3c58e60';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -358,7 +358,19 @@
   // каждую, а вшитый адрес - что страница, выложенная до появления Worker'а, остаётся
   // немой до следующего деплоя (этот класс мы уже ловили у плеера).
   var API = (q.get('api') || 'https://hara-search.laynenorstrud.workers.dev').replace(/\/+$/, '');
-  var ROOM = (q.get('room') || '').toLowerCase();
+  // ═══ ИМЯ КОМНАТЫ: ПАРАМЕТР ССЫЛКИ ЛИБО `startapp` ИМЕНОВАННОЙ МИНИ-АППКИ ═══
+  // Ссылка `t.me/<бот>/room?startapp=<комната>` открывает эту страницу НАПРЯМУЮ, и в ней
+  // нет ни `?room=`, ни прочих наших параметров - Telegram кладёт полезную нагрузку в
+  // `start_param`. Это и снимает второй тап: раньше приглашение вело в личку, потому что
+  // web_app-кнопку в группу переслать нельзя.
+  // ЧИСТКИ ЗДЕСЬ НЕТ НАРОЧНО. Правило «что считать именем комнаты» живёт у Worker'а
+  // (`rtcRoom`), и вторая копия молча увела бы человека в ДРУГУЮ комнату - он бы сидел в
+  // тишине, а у нас было бы два зелёных теста. Отказ приходит от Worker'а, с причиной.
+  var START_PARAM = '';
+  try {
+    START_PARAM = String((tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '');
+  } catch (e) {}
+  var ROOM = (q.get('room') || START_PARAM || '').toLowerCase();
 
   function say(t, bad) {
     var el = $('state');
@@ -368,7 +380,14 @@
   function sub(t) { $('sub').textContent = t; }
   var connected = false;
 
-  if (!ROOM) { sub('Комната не указана'); say('В ссылке нет параметра room.', true); return; }
+  if (!ROOM) {
+    sub('Комната не указана');
+    // ДВА СПОСОБА - ДВЕ ПРИЧИНЫ В ОДНОЙ СТРОКЕ: «нет параметра room» ничего не говорит
+    // тому, кто пришёл по `?startapp=`, а он теперь основной.
+    say('Не понял, в какую комнату: в адресе нет ни room=, ни startapp. Открой комнату '
+        + 'кнопкой из бота или по свежему приглашению.', true);
+    return;
+  }
   $('title').textContent = 'Комната: ' + ROOM;
 
   if (!window.LivekitClient) {
@@ -400,6 +419,56 @@
     say('Открой комнату кнопкой из бота: без подписи сервер не знает, кто ты. '
         + 'Либо попроси разовую ссылку - по ней можно войти и без Telegram.', true);
     return;
+  }
+
+
+  // ═══ «Подключаюсь…» НЕ ИМЕЕТ ПРАВА ВИСЕТЬ ВЕЧНО ═══
+  // ЖИВОЙ ОТКАЗ REN: «Перезагрузить» в меню Telegram оставляет страницу на «Подключаюсь…»
+  // навсегда, выход и повторный вход лечит. Между ранними отказами и подключением у нас
+  // не было НИ ОДНОЙ строки состояния, а на пути стоят три безграничных ожидания: два
+  // своих `fetch` (версия и токен) и `room.connect()`. Любое из них, зависнув, оставляет
+  // человека со СТАРТОВЫМ текстом - то есть с тем же экраном, что и при полной тишине.
+  // ЧТО ИМЕННО ТЕРЯЕТ ВЕБВЬЮ ПРИ RELOAD, ОТСЮДА НЕ УСТАНОВИТЬ (`telegram.org` из нашего
+  // контейнера закрыт, CONNECT 403), и гадать мы не будем. Поэтому лечим так, чтобы
+  // ОТВЕТ НА ЭТОТ ВОПРОС НЕ ТРЕБОВАЛСЯ: сторож называет СТАДИЮ и видимые факты, и
+  // следующий живой reload отвечает сам.
+  var BOOT_TEXT = $('sub').textContent;      // ровно то, что человек видит на старте
+  var BOOT_LIMIT_MS = 20000;
+  var STAGE = 'старт';
+  function stage(s) { STAGE = s; }
+
+  var BOOT_ASKING = 'жду, пока гость назовёт себя';
+  setTimeout(function boot() {
+    // ЧЕЛОВЕК ДУМАЕТ НАД ОТВЕТОМ - ЭТО НЕ ЗАВИСАНИЕ. `prompt` у веб-гостя держит поток
+    // сколько угодно, и обвинить в этом сеть значило бы соврать самым обидным способом:
+    // он в этот момент как раз работает с нами.
+    if (STAGE === BOOT_ASKING) { setTimeout(boot, BOOT_LIMIT_MS); return; }
+    // СРАБАТЫВАЕМ ТОЛЬКО ЕСЛИ ЧЕЛОВЕК ВСЁ ЕЩЁ ВИДИТ СТАРТОВЫЙ ТЕКСТ. Смотрим на ЭКРАН, а не на
+    // свои флаги: любая ветка, успевшая сказать причину, уже ответила ему - перебивать её
+    // «застряло» значило бы заменить точный отказ общим (закон №35).
+    if ($('sub').textContent !== BOOT_TEXT) return;
+    sub('Не подключился');
+    var f = [];
+    f.push('шаг: ' + STAGE);
+    f.push(initData ? 'подпись Telegram: есть' : (WEB ? 'вход по ссылке' : 'подписи нет'));
+    f.push('сервер: ' + (API || 'НЕ ЗАДАН'));
+    try { if (room) f.push('соединение: ' + room.state); } catch (e) {}
+    say('За ' + Math.round(BOOT_LIMIT_MS / 1000) + ' с не дошло до комнаты. ' + f.join(' · ')
+        + '. Закрой окно и открой комнату заново из бота - это лечит.', true);
+  }, BOOT_LIMIT_MS);
+
+  // НАШИ ЗАПРОСЫ ОБЯЗАНЫ КОНЧАТЬСЯ. `fetch` без сигнала не кончается НИКОГДА - ни успехом,
+  // ни отказом, - и именно так выглядел зависший старт. Чужие библиотеки правим не мы, а
+  // свои два запроса - наши.
+  function fetchT(url, opts, ms) {
+    var ac = null;
+    try { ac = new AbortController(); } catch (e) { ac = null; }
+    var o = {};
+    for (var k in (opts || {})) if (Object.prototype.hasOwnProperty.call(opts, k)) o[k] = opts[k];
+    if (ac) o.signal = ac.signal;
+    var t = setTimeout(function () { try { if (ac) ac.abort(); } catch (e) {} }, ms || 15000);
+    return fetch(url, o).then(function (r) { clearTimeout(t); return r; },
+                              function (e) { clearTimeout(t); throw e; });
   }
 
   // ═══ ФЛАГИ ОБРАБОТКИ ЗВУКА ═══
@@ -1535,26 +1604,31 @@
   }
 
   async function go() {
+    stage('запрос токена');
     var r;
     try {
       if (WEB) {
         // ИМЯ СПРАШИВАЕМ, ЕСЛИ ЕГО НЕТ В ССЫЛКЕ: человек без Telegram нам не представлен
         // ничем, а соседям по комнате надо знать, кто говорит.
         var nm = q.get('name') || '';
-        if (!nm) { try { nm = (prompt('Как тебя звать в комнате?') || '').slice(0, 40); } catch (e) {} }
+        if (!nm) {
+          stage(BOOT_ASKING);
+          try { nm = (prompt('Как тебя звать в комнате?') || '').slice(0, 40); } catch (e) {}
+          stage('запрос токена');
+        }
         // ═══ СВОЁ МЕСТО ВОЗВРАЩАЕМ, А НЕ ЗАНИМАЕМ ВТОРОЕ ═══
         // Ссылка отдаёт десять мест, и перезагрузка (в том числе НАША, ради обновления
         // версии) съедала бы по одному. Строка места случайная, живёт ТОЛЬКО здесь и
         // наружу не уезжает - вернуть её может лишь этот браузер.
         var _seat = '';
         try { _seat = localStorage.getItem('rtc_seat_' + ROOM) || ''; } catch (e) {}
-        r = await fetch(API + '/rtc/web?t=' + encodeURIComponent(WEB)
+        r = await fetchT(API + '/rtc/web?t=' + encodeURIComponent(WEB)
                         + (nm ? '&name=' + encodeURIComponent(nm) : '')
-                        + (_seat ? '&seat=' + encodeURIComponent(_seat) : ''));
+                         + (_seat ? '&seat=' + encodeURIComponent(_seat) : ''), null, 15000);
       } else {
-        r = await fetch(API + '/rtc/token?room=' + encodeURIComponent(ROOM), {
+        r = await fetchT(API + '/rtc/token?room=' + encodeURIComponent(ROOM), {
           headers: { 'X-Init-Data': initData },
-        });
+        }, 15000);
       }
     } catch (e) {
       sub('Сервер не ответил');
@@ -1745,11 +1819,13 @@
     room.on(LK.RoomEvent.Reconnecting, function () { say('Связь прервалась, возвращаюсь…'); });
     room.on(LK.RoomEvent.Reconnected, function () { say(''); });
 
+    stage('подключение к комнате');
     try {
       await room.connect(j.url, j.token);
       // ФЛАГИ ПЕРЕДАЮТСЯ ЯВНО, А НЕ ТОЛЬКО ЧЕРЕЗ УМОЛЧАНИЯ КОМНАТЫ. Умолчания SDK
       // мержит со своими, и «мы же попросили в конструкторе» - это рассуждение, а не
       // гарантия: у аргумента приоритет выше, и он снимает вопрос целиком.
+      stage('включение микрофона');
       await room.localParticipant.setMicrophoneEnabled(true, AUDIO_WANT);
     } catch (e) {
       sub('Не подключился');
@@ -2768,9 +2844,13 @@ registerProcessor('rnn-denoise', RnnProc);
 
     if (!mayScreen && !mayCam) {
       // ГЛАВНОЕ СООБЩЕНИЕ ЭТОГО ЭКРАНА: причина НЕ в браузере и не в комнате.
-      $('showhint').textContent = 'Показ выключен на сервере: токен выдан без права '
-        + 'публикации. Это у нас - Worker выложен старой версией, лечится '
-        + 'worker_deploy.deploy(). Смотреть чужой экран при этом можно.';
+      // НАЗЫВАЕМ ПРОВЕРЕННЫЙ ФАКТ И ГОВОРИМ, ЧЕМ ПРОВЕРИТЬ ПРИЧИНУ, А НЕ УТВЕРЖДАЕМ ЕЁ.
+      // Прежняя редакция дописывала «Worker выложен старой версией» - это ДОГАДКА: тот
+      // же пустой грант даёт и токен, выданный вчера, и смена политики выдачи. Факт у
+      // нас ровно один - в токене нет права публикации.
+      $('showhint').textContent = 'Показ выключен на сервере: в токене нет права '
+        + 'публикации. Это у нас, не у тебя: смотреть чужой экран при этом можно. '
+        + 'Проверить - tools/rtc_env.py, там видно, каким Worker\'ом выдан токен.';
     } else {
       if (canScreen) showBtn.style.display = '';
       if (canCam) camBtn.style.display = '';
@@ -2782,11 +2862,193 @@ registerProcessor('rnn-denoise', RnnProc);
     }
     barLabel(showBtn, '🖥', 'Экран');
 
+    // ═══ ПОРОГ СТОРОЖА ЗАВЕДОМО ВЫШЕ ВСЕХ ПОТОЛКОВ SDK ═══
+    // ЖИВОЙ ОТКАЗ REN: «сервер не принял дорожку за 12 с», и после этого до перезахода не
+    // работали НИ экран, НИ камера. Причина найдена исходником `livekit-client@2.7.2`, а
+    // не рассуждением: у SDK свои таймауты на ОБЕИХ стадиях - `RTCEngine.addTrack` 10 с
+    // («publication of local track timed out») и `PCTransportManager.negotiate` 15 с
+    // (`peerConnectionTimeout`). Наши 12 с стояли РОВНО МЕЖДУ ними, то есть сторож резал
+    // ЖИВОЕ окно негоциации и не давал дойти точному отказу SDK.
+    // ПОЧЕМУ СТОРОЖ ВСЁ-ТАКИ НУЖЕН: два ожидания у SDK не ограничены ничем -
+    // `getDisplayMedia` (человек выбирает источник, и это законно) и
+    // `await this.republishPromise` в `setTrackEnabled` при переподключении. Второе как
+    // раз и держит нас после аварии.
+    // ЗНАЧИТ ОН СТРАХОВКА, А НЕ СУДЬЯ: 25 с (10 и 15 со слаком), а текст отказа берётся У
+    // SDK, если тот успел ответить. Свой - только когда SDK не сказал ничего.
+    var PUB_WATCHDOG_MS = 25000;
+
+    // ═══ ПОСЛЕ НЕУДАЧНОЙ ПУБЛИКАЦИИ ДВИЖОК ВОЗВРАЩАЕТСЯ В РАБОЧЕЕ СОСТОЯНИЕ ═══
+    // Провал негоциации у SDK зовёт `handleDisconnect('negotiation')`, движок уходит в
+    // ПЕРЕПОДКЛЮЧЕНИЕ, а `setTrackEnabled` первым делом ждёт `republishPromise` - это
+    // ОБЩЕЕ состояние, не по источнику. Отсюда «умерли обе кнопки»: камера ни при чём,
+    // она просто ждёт того же.
+    // ПОЭТОМУ ПОСЛЕ ОТКАЗА МЫ ЖДЁМ ФАКТА, А НЕ ПОКАЗЫВАЕМ ОШИБКУ И УХОДИМ. Ждём
+    // ограниченно и смотрим `room.state` - именно его SDK выставляет в 'connected' по
+    // завершении переподключения.
+    function connOk() { return String(room.state || '') === 'connected'; }
+
+    async function settle(ms) {
+      var t0 = Date.now();
+      while (Date.now() - t0 < ms) {
+        if (connOk()) return true;
+        await new Promise(function (r) { setTimeout(r, 250); });
+      }
+      return connOk();
+    }
+
+    // РУЧНОЕ ПЕРЕПОДКЛЮЧЕНИЕ - КНОПКОЙ, А НЕ САМО. Оно рвёт звук у всех, кто в разговоре;
+    // делать это за человека посреди фразы хуже самой болезни. Кнопка при этом ЕСТЬ, и
+    // это и есть «без перезахода»: окно закрывать не нужно.
+    // ═══ ЖДЁМ ДВИЖОК В ФОНЕ, А НЕ ДЕРЖА КНОПКУ ═══
+    // Первая редакция ждала `settle` ПРЯМО в обработчике тапа, и кнопка оставалась серой
+    // все двенадцать секунд - то есть лечение от западни само было маленькой западнёй.
+    // Человеку кнопка нужна СРАЗУ (отказ мог быть разовым), а предложение переподключиться
+    // догонит его само.
+    function watchEngine(why) {
+      settle(12000).then(function (ok) { if (!ok) offerRedo(why); },
+                         function () { offerRedo(why); });
+    }
+
+    var _redoBtn = null;
+    function offerRedo(why) {
+      if (_redoBtn) { _redoBtn.style.display = ''; return; }
+      var host = $('showhint');
+      if (!host) return;
+      _redoBtn = document.createElement('button');
+      _redoBtn.id = 'redo';          // чтобы реестр переключателей её ВИДЕЛ
+      _redoBtn.className = 'wide';
+      _redoBtn.textContent = '🔌 Переподключиться';
+      _redoBtn.onclick = async function () {
+        _redoBtn.disabled = true;
+        say('Переподключаюсь…');
+        try {
+          await room.disconnect();
+          // ТОТ ЖЕ ТОКЕН, ЧТО И НА ВХОДЕ: он живёт 15 минут и в самом частом случае
+          // (авария вскоре после входа) ещё годен. Протух - говорим это ПРЯМО, а не
+          // «не получилось»: лечится он не повтором, а новым входом из бота.
+          await room.connect(j.url, j.token);
+          await room.localParticipant.setMicrophoneEnabled(true, AUDIO_WANT);
+          say('');
+          _redoBtn.style.display = 'none';
+        } catch (e) {
+          var m = String((e && e.message) || e);
+          say(/expire|invalid|token/i.test(m)
+              ? 'Токен входа протух - открой комнату заново из бота, кнопка там всегда '
+                + 'свежая. (' + m + ')'
+              : 'Переподключиться не вышло: ' + m, true);
+        }
+        _redoBtn.disabled = false;
+      };
+      host.parentNode.insertBefore(_redoBtn, host.nextSibling);
+      // ═══ ЛЕЧЕНИЕ ДОПИСЫВАЕТСЯ К ПРИЧИНЕ, А НЕ ЗАМЕНЯЕТ ЕЁ ═══
+      // Поймала браузерная проба, а не чтение: `stopShow` честно говорил «у себя выключил,
+      // сервер не подтвердил», а следом `offerRedo` затирал это своим текстом - человек
+      // получал «нажми Переподключиться» и терял ЕДИНСТВЕННОЕ, что объясняло, видят его
+      // соседи или нет. Диагноз и что делать нужны ОБА.
+      var _was = ($('state').textContent || '').trim();
+      say((_was ? _was + ' ' : '') + why
+          + ' Соединение не вернулось само - нажми «Переподключиться», окно закрывать '
+          + 'не надо.', true);
+    }
+
     // ═══ ОДНА ДВЕРЬ НА ОБА ПОКАЗА, РАЗНЫЕ ТОЛЬКО ИСТОЧНИК И ПОДПИСЬ ═══
     // Две копии «включить/выключить» разошлись бы на первой правке (закон №40), а тут
     // цена расхождения - висящая дорожка, которую видно СОСЕДЯМ, а не нам.
     function toggler(btn, kind, offIcon, word) {
       var live = false;
+      // ПОДПИСЬ И КЛАСС - ОДНОЙ ДВЕРЬЮ, ИЗ `live`. Пока их ставили по местам, ветка
+      // отказа забывала их вернуть, и кнопка показывала «идёт показ» над мёртвой
+      // дорожкой (живой отказ Ren).
+      function paint() {
+        btn.classList.toggle('on', live);
+        barLabel(btn, live ? '⏹' : offIcon, word);
+      }
+
+      function sdkOff() {
+        return kind === 'screen'
+          ? room.localParticipant.setScreenShareEnabled(false)
+          : room.localParticipant.setCameraEnabled(false);
+      }
+
+      async function stopShow() {
+        // ПОРЯДОК ЗДЕСЬ ЗНАЧИМ, И ЭТО ПОЙМАЛ БРАУЗЕРНЫЙ ПРОГОН. Сперва гасим САМИ
+        // дорожки (пока публикации ещё на месте), потом отключаем источник: наоборот
+        // `setScreenShareEnabled(false)` уже снял публикации, и явная остановка работала
+        // ВХОЛОСТУЮ - счётчик остановленных дорожек показывал ноль. Незакрытая дорожка
+        // держит захват, и следующий выбор источника ведёт себя непредсказуемо.
+        stopLocalMedia(kind);
+        // ═══ ЛОКАЛЬНО МЫ УЖЕ ВЫКЛЮЧЕНЫ, ЧТО БЫ НИ ОТВЕТИЛ SDK ═══
+        // Захват снят строкой выше, значит честное состояние кнопки - «выключено», и
+        // ставим его ДО просьбы к SDK. ПРЕЖНЯЯ РЕДАКЦИЯ ДЕЛАЛА НАОБОРОТ: на исключении
+        // она оставляла live=true и класс `.on`, следующий тап снова шёл в остановку,
+        // снова падал - и человек был заперт до перезахода (живой отказ Ren:
+        // «waiting for pending publication promise timed out», кнопка залипает).
+        live = false;
+        try {
+          await sdkOff();
+          say('');
+        } catch (e) {
+          // ГОВОРИМ РОВНО ТО, ЧТО ЗНАЕМ: у себя выключили, а снял ли публикацию сервер -
+          // не знаем. Молчаливое «выключено» здесь было бы обещанием соседям, которое мы
+          // не можем сдержать.
+          say('У себя ' + word.toLowerCase() + ' выключил, но сервер снятие не подтвердил ('
+              + (e && e.message || e) + '). Соседи могут ещё пару секунд видеть картинку.',
+              true);
+          watchEngine('Показ снят у себя, но соединение в переподключении.');
+        }
+      }
+
+      async function startShow() {
+        var lost = false, pub = null;
+        try {
+          pub = (kind === 'screen')
+            // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
+            // живёт на общем канале песочницы. Читаемость текста даёт и 1080p.
+            ? room.localParticipant.setScreenShareEnabled(
+                true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
+            : room.localParticipant.setCameraEnabled(true);
+          await Promise.race([pub, new Promise(function (_, rej) {
+            setTimeout(function () {
+              lost = true;
+              // НИ СЛОВА О ПРИЧИНЕ: мы её не знаем. ПРЕЖНЯЯ РЕДАКЦИЯ УТВЕРЖДАЛА «старый
+              // токен без права показа: у нас не выложен Worker» - и это было ЗАВЕДОМО
+              // ЛОЖНО, потому что кнопка вообще показывается ТОЛЬКО когда в гранте есть
+              // нужный источник (см. `grantOf` выше). То есть единственное, что мы к
+              // этому моменту проверили, подсказка и отрицала.
+              rej(new Error('за ' + Math.round(PUB_WATCHDOG_MS / 1000)
+                            + ' с не пришло ни подтверждения, ни отказа (свои потолки у '
+                            + 'клиента - 10 и 15 с, значит встало не на них)'));
+            }, PUB_WATCHDOG_MS);
+          })]);
+          live = true; say('');
+        } catch (e) {
+          if (lost) {
+            // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
+            // методом, которым включали: только он умеет снять состояние «публикуется».
+            try { await sdkOff(); } catch (e2) {}
+            // А ЕСЛИ ОНА ВСЁ-ТАКИ ДОЕДЕТ ПОЗЖЕ - СНИМАЕМ И ЕЁ. Иначе человек показывает
+            // экран, будучи уверенным, что не показывает, и выключить нечем.
+            try {
+              pub.then(function () {
+                if (live) return;
+                try { stopLocalMedia(kind); } catch (e3) {}
+                try { sdkOff(); } catch (e3) {}
+                say('Дорожка доехала уже после отказа - снял её. Попробуй ещё раз.', true);
+              }, function () {});
+            } catch (e4) {}
+          }
+          stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
+          live = false;
+          say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
+              + (e && e.message || e), true);
+          // ═══ ВОЗВРАЩАЕМ ДВИЖОК, А НЕ ТОЛЬКО ПОКАЗЫВАЕМ ОШИБКУ ═══
+          // Требование Ren по живому прогону: после неудачи и экран, и камера обязаны
+          // включаться без перезахода. Ждём ФАКТА `room.state === 'connected'`, а не
+          // «мы позвали и надеемся» (закон №35); не вернулось - даём кнопку.
+          watchEngine('Показать не вышло, и соединение ушло в переподключение.');
+        }
+      }
+
       btn.onclick = async function () {
         // ДВА ОДНОВРЕМЕННЫХ ВЫЗОВА ОДНОГО ИСТОЧНИКА - ВТОРОЙ ИСТОЧНИК ТОЙ ЖЕ ОШИБКИ.
         // livekit-client ждёт незавершённую операцию и падает «waiting for pending
@@ -2794,86 +3056,14 @@ registerProcessor('rnn-denoise', RnnProc);
         // воспроизводит это без всякого таймаута.
         if (btn.disabled) return;
         btn.disabled = true;
-        if (live) {
-          try {
-            // ВЫКЛЮЧАЕМ ТЕМ ЖЕ МЕТОДОМ, ЧТО ВКЛЮЧАЛИ. Прежняя редакция звала
-            // `unpublishTrack(sharing)`, где `sharing` было БУЛЕВЫМ - в SDK уезжало
-            // `true` вместо дорожки, и публикация не снималась ВООБЩЕ: у себя кнопка
-            // менялась, у соседей картинка оставалась (живой отказ Ren 25.08). Отсюда же
-            // рос второй симптом - старый поток не освобождался, и следующий выбор
-            // источника вёл себя непредсказуемо.
-            // ПОРЯДОК ЗДЕСЬ ЗНАЧИМ, И ЭТО ПОЙМАЛ БРАУЗЕРНЫЙ ПРОГОН. Сперва гасим САМИ
-            // дорожки (пока публикации ещё на месте), потом отключаем источник: наоборот
-            // `setScreenShareEnabled(false)` уже снял публикации, и явная остановка
-            // работала ВХОЛОСТУЮ - счётчик остановленных дорожек показывал ноль.
-            // Незакрытая дорожка держит захват, браузер считает источник занятым, и
-            // следующий выбор источника ведёт себя непредсказуемо (живой отказ Ren 25.08).
-            stopLocalMedia(kind);
-            if (kind === 'screen') await room.localParticipant.setScreenShareEnabled(false);
-            else await room.localParticipant.setCameraEnabled(false);
-          } catch (e) {
-            say('Не удалось остановить показ: ' + (e && e.message || e), true);
-            btn.disabled = false;
-            return;
-          }
-          live = false; btn.classList.remove('on'); barLabel(btn, offIcon, word);
-          say('');
-          btn.disabled = false;
-          return;
-        }
         try {
-          // ВИСЕТЬ НЕЛЬЗЯ: у LiveKit публикация без права уходит в бесконечное ожидание,
-          // и человек видит крутилку вместо причины.
-          var pub = (kind === 'screen')
-            // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
-            // живёт на общем канале песочницы. Читаемость текста даёт и 1080p.
-            ? room.localParticipant.setScreenShareEnabled(
-                true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
-            : room.localParticipant.setCameraEnabled(true);
-          // ═══ БРОШЕННОЕ ОЖИДАНИЕ ОСТАВЛЯЕТ ПУБЛИКАЦИЮ ВИСЕТЬ, И СЛЕДУЮЩИЙ ТАП ПАДАЕТ ═══
-          // ЖИВОЙ ОТКАЗ REN: «waiting for pending publication promise timed out». Это
-          // сообщение livekit-client, и производил его МОЙ ЖЕ предохранитель: `race`
-          // отменяет ОЖИДАНИЕ, а операция внутри SDK остаётся в работе. Источник
-          // числится «публикуется», и второй тап ждёт её и падает - ровно тот класс, что
-          // записан про `wait_for` (отменили ожидание, процесс живёт).
-          // ПОЭТОМУ ПОСЛЕ ТАЙМАУТА МЫ ОБЯЗАНЫ ЕЁ УСПОКОИТЬ, а не просто отпустить.
-          var lost = false;
-          await Promise.race([pub, new Promise(function (_, rej) {
-            setTimeout(function () {
-              lost = true;
-              rej(new Error('сервер не принял дорожку за 12 с. Чаще всего это старый токен '
-                            + 'без права показа: у нас не выложен Worker.'));
-            }, 12000);
-          })]);
-          live = true; btn.classList.add('on'); barLabel(btn, '⏹', word);
+          if (live) await stopShow(); else await startShow();
         } catch (e) {
-          // ПРИЧИНА НАЗЫВАЕТСЯ ВСЕГДА: отказ в разрешении и отсутствие метода лечатся
-          // по-разному, и «не получилось» отправило бы человека чинить не то.
-          if (lost) {
-            // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
-            // методом, которым включали: только он умеет снять состояние «публикуется».
-            try { await (kind === 'screen'
-              ? room.localParticipant.setScreenShareEnabled(false)
-              : room.localParticipant.setCameraEnabled(false)); } catch (e2) {}
-            // А ЕСЛИ ОНА ВСЁ-ТАКИ ДОЕДЕТ ПОЗЖЕ - СНИМАЕМ И ЕЁ. Иначе человек показывает
-            // экран, будучи уверенным, что не показывает, и выключить нечем: кнопка у
-            // него говорит «Показать».
-            try {
-              pub.then(function () {
-                if (live) return;
-                try { stopLocalMedia(kind); } catch (e3) {}
-                try { (kind === 'screen'
-                  ? room.localParticipant.setScreenShareEnabled(false)
-                  : room.localParticipant.setCameraEnabled(false)); } catch (e3) {}
-                say('Дорожка доехала уже после отказа - снял её. Попробуй ещё раз.', true);
-              }, function () {});
-            } catch (e4) {}
-          }
-          stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
-          live = false; btn.classList.remove('on'); barLabel(btn, offIcon, word);
-          say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
-              + (e && e.message || e), true);
+          // СЮДА ПОПАДАТЬ НЕ ДОЛЖНЫ - но если попали, кнопка обязана ожить всё равно.
+          say('Не вышло: ' + (e && e.message || e), true);
         } finally {
+          // ═══ КНОПКА ВОЗВРАЩАЕТСЯ В СОСТОЯНИЕ, СООТВЕТСТВУЮЩЕЕ `live`, ВСЕГДА ═══
+          paint();
           btn.disabled = false;
         }
       };
@@ -4413,10 +4603,11 @@ registerProcessor('rnn-denoise', RnnProc);
   }
 
   async function checkVersion() {
+    stage('проверка версии страницы');
     var j = null;
     try {
-      var r = await fetch(API + '/appver?app=room&t=' + encodeURIComponent(VERSION),
-                          { cache: 'no-store' });
+      var r = await fetchT(API + '/appver?app=room&t=' + encodeURIComponent(VERSION),
+                           { cache: 'no-store' }, 8000);
       j = await r.json();
     } catch (e) { j = null; }
     var v = verdictVersion(j);
