@@ -21,17 +21,39 @@
   /* ВТОРАЯ СТРОКА ОБЯЗАНА БЫТЬ ВТОРОЙ: без `pre-line` перенос схлопнулся бы в пробел,
      и подробности слиплись бы с сутью - ровно та стена текста, которую убираем. */
   .me { color:var(--mut); font-size:12px; white-space:pre-line; }
-  #bar { position:fixed; left:0; right:0; bottom:0; padding:12px 14px calc(12px + env(safe-area-inset-bottom));
-         background:#16161c; display:flex; gap:10px; }
+  /* НИЖНЯЯ ПОЛОСА - ЭТО ТО, ЧЕМ ПОЛЬЗУЮТСЯ В КАЖДОМ СОЗВОНЕ, и её кнопок стало шесть.
+     Подписи ужимаются до иконки на узком экране: «🎙 Микрофон» в 320 px рядом с пятью
+     соседями превращается в многоточие, а иконка читается всегда. */
+  #bar { position:fixed; left:0; right:0; bottom:0; padding:10px 10px calc(10px + env(safe-area-inset-bottom));
+         background:#16161c; display:flex; gap:6px; }
   button { flex:1; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px;
            background:#3a7afe; color:#fff; }
+  /* НЕЙТРАЛЬНАЯ ПО УМОЛЧАНИЮ, СИНЯЯ - КОГДА ВКЛЮЧЕНА. Шесть одинаково ярких кнопок
+     читаются как экран, где всё одинаково важно, то есть где ничего не важно. */
+  #bar button { padding:12px 6px; font-size:13px; overflow:hidden; white-space:nowrap;
+                text-overflow:clip; background:#25252e; }
+  #bar button.on { background:#3a7afe; }
+  @media (max-width: 420px) { #bar button .lbl { display:none; } }
   button.off { background:#3a3a44; }
-  button.leave { background:#4a2226; color:#ff9aa0; flex:0 0 40%; }
+  button.leave { background:#4a2226; color:#ff9aa0; flex:0 0 22%; }
   button:active { opacity:.85; }
   #state { font-size:13px; color:var(--mut); margin:8px 0 0; }
   button.wide { width:100%; margin:6px 0; background:#25252e; font-weight:500; font-size:14px; }
   button.wide.on { background:#3a7afe; }
-  #screens video { width:100%; border-radius:10px; margin:8px 0; background:#000; }
+  /* РАСКЛАДКИ ВИДЕО. «Авто» - одно видео во всю ширину, два и больше - сетка; «крупно» -
+     говорящий большой, остальные лентой снизу. Как в Zoom и Meet устроено ЭТО, а не их
+     пиксели: человек выбирает, на что смотреть, а не мирится с тем, что выбрали за него. */
+  #screens { display:flex; flex-direction:column; }
+  #screens .vwrap { position:relative; margin:8px 0; }
+  #screens video { width:100%; display:block; border-radius:10px; background:#000; }
+  #screens .vnm { position:absolute; left:6px; bottom:6px; padding:2px 8px; font-size:12px;
+                  border-radius:999px; background:rgba(0,0,0,.55); color:#fff; }
+  #screens.grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  #screens.grid .vwrap { margin:0; }
+  #screens.spk { display:flex; flex-direction:column; }
+  #screens.spk .vwrap.big { order:0; }
+  #screens.spk .vwrap.small { order:1; width:34%; display:inline-block; }
+  #screens.spk .strip { order:1; display:flex; gap:6px; overflow-x:auto; }
   .hand { color:#ffd166; font-size:12px; }
   .err { color:var(--bad); }
   /* ИНДИКАТОР ЗАПИСИ ВИДЕН БЕЗ ПОИСКА ГЛАЗАМИ: он про то, что разговор сохраняется, и
@@ -202,16 +224,31 @@
 
 <!-- РЕАКЦИИ ВЫШЕ СЛУЖЕБНЫХ КНОПОК: по ним тапают посреди чужой реплики, не отводя
      взгляда от списка людей, а «показать экран» ищут глазами один раз за созвон. -->
-<div class="card" id="react">
+<!-- ═══ ЧАСТОЕ НА ВИДУ, РЕДКОЕ ЗА ОДНОЙ КНОПКОЙ ═══
+     ЖИВОЙ ОТЗЫВ REN ПОСЛЕ СОЗВОНА: «восемь эмодзи, восемь звуков, десяток кнопок - всё
+     сразу на виду». Это не вкусовщина: экран, где всё одинаково важно, читается как
+     экран, где ничего не важно, и человек ищет микрофон глазами каждый раз.
+     ЛОГИКА ZOOM/MEET, А НЕ ИХ РАСКЛАДКА: внизу то, чем пользуются В КАЖДОМ созвоне
+     (микрофон, камера, экран, выход), остальное - за «Ещё», раскрывается по запросу.
+     Реакции - за ОДНОЙ кнопкой: это один жест («отозваться»), а не шестнадцать. -->
+<div class="card" id="react" style="display:none">
   <div id="emos"></div>
   <div id="snds"></div>
   <p class="me" id="reacthint"></p>
 </div>
 
-<div id="tools" class="card">
+<div id="tools" class="card" style="display:none">
   <button id="hand" class="wide">✋ Поднять руку</button>
+  <!-- РАСКЛАДКА И ПОЛНЫЙ ЭКРАН - РЯДОМ: оба про то, КАК СМОТРЕТЬ, а не про то, что
+       происходит в комнате. Полноэкранная кнопка появляется только там, где клиент это
+       умеет: у Telegram это Bot API 8.0, а на старом клиенте её быть не должно вовсе. -->
+  <button id="lay" class="wide">🔲 Раскладка: авто</button>
+  <button id="full" class="wide" style="display:none">⛶ Во весь экран</button>
   <button id="tmr" class="wide">⏱ Таймер</button>
   <button id="chart" class="wide">📈 График и доска</button>
+  <!-- ПРИЧИНА СТОИТ ТАМ, ГДЕ ЖДУТ КНОПКУ. Исчезнувшая без объяснения кнопка читается
+       как «функции нет», а не как «её убрал админ» (закон №36). -->
+  <p class="me" id="lockwhy"></p>
   <button id="amabtn" class="wide">🙋 Очередь вопросов</button>
   <button id="pollbtn" class="wide">🗳 Голосование</button>
   <button id="subbtn" class="wide" style="display:none">📝 Включить распознавание</button>
@@ -220,8 +257,6 @@
   <button id="subshow" class="wide" style="display:none">🙈 Скрыть ленту у себя</button>
   <p class="me" id="subwhy"></p>
   <div id="tmrset" style="display:none"></div>
-  <button id="show" class="wide" style="display:none"></button>
-  <button id="cam" class="wide" style="display:none">📷 Показать камеру</button>
   <button id="hush" class="wide" style="display:none">🤫 Заглушить всех, кроме говорящего</button>
   <button id="rec" class="wide" style="display:none">⏺ Записать созвон</button>
   <button id="dj" class="wide" style="display:none">📻 Включить радио</button>
@@ -229,7 +264,7 @@
        исчезает вместе с ней: регулятор того, чего не играет, читается как «сломано». -->
   <div id="djvol" style="display:none">
     <label class="me" for="djv" id="djvlab"></label>
-    <input id="djv" type="range" min="0" max="28" step="1">
+    <input id="djv" type="range" min="0" max="30" step="1">
   </div>
   <p class="me" id="showhint"></p>
   <!-- ПРИЧИНА, ПО КОТОРОЙ КНОПКИ НЕТ, ЖИВЁТ РЯДОМ С МЕСТОМ, ГДЕ ЕЁ ЖДУТ. Общая
@@ -237,6 +272,10 @@
        объяснение исчезает через секунду - проверено браузером, чтением не видно. -->
   <p class="me" id="recwhy"></p>
   <button id="rnn" class="wide" style="display:none">🔇 Подавить шум</button>
+  <!-- ПРЕДЛОЖЕНИЕ ПО ЗАМЕРУ, А НЕ ПО РАСПИСАНИЮ. Стоит ОТДЕЛЬНОЙ строкой, а не в общем
+       состоянии: то перетирается следующим сообщением через секунду, и предложение,
+       ради которого мы мерили фон, исчезало бы раньше, чем человек его прочтёт. -->
+  <p class="me" id="rnnoffer" style="display:none"></p>
   <p class="me" id="audiodbg"></p>
 </div>
 
@@ -256,8 +295,31 @@
 
 <div id="pops"></div>
 
+<!-- АДМИНСКИЕ ДЕЙСТВИЯ НАД ВСЕЙ КОМНАТОЙ. Появляются ТОЛЬКО у админа: кнопка, которая
+     ответит «это может только админ», хуже отсутствующей. Право всё равно проверяет БОТ
+     (закон №32) - здесь мы решаем лишь, что показывать. -->
+<div id="admin" class="card" style="display:none">
+  <p class="me">Ты админ комнаты. Это действует у ВСЕХ.</p>
+  <!-- СВЯЗЬ - ЦИФРАМИ, И ТОЛЬКО АДМИНУ. «У меня заикается» и «потери 3.4%, джиттер 48 мс»
+       это разные разговоры: по первому нечего делать, по второму видно, у КОГО плохо и
+       стоит ли просить его выключить видео. Всем подряд эти числа не нужны. -->
+  <p class="me" id="connq"></p>
+  <button id="admdj" class="wide">📻 Выключить радио у всех</button>
+  <button id="admsub" class="wide">📝 Выключить распознавание</button>
+  <button id="admlock" class="wide">🔒 Убрать доску и график</button>
+  <!-- ШУМОДАВ ВСЕМ - ПРОСЬБА С НАСТОЯЩИМ ГЕЙТОМ, А НЕ ПРИКАЗ. Включает его страница
+       каждого участника, и каждый вправе тут же выключить обратно у себя. Обе стороны
+       есть (закон №55): второй тап просит выключить. -->
+  <button id="admrnn" class="wide">🔇 Шумодав всем</button>
+  <p class="me" id="admrnnwhy"></p>
+</div>
+
 <div id="bar">
-  <button id="mic">🎙 Выключить микрофон</button>
+  <button id="mic" class="on">🎙<span class="lbl"> Микрофон</span></button>
+  <button id="cam" style="display:none">📷<span class="lbl"> Камера</span></button>
+  <button id="show" style="display:none">🖥<span class="lbl"> Экран</span></button>
+  <button id="barreact">😀<span class="lbl"> Реакции</span></button>
+  <button id="more">⋯<span class="lbl"> Ещё</span></button>
   <button id="out" class="leave">Выйти</button>
 </div>
 
@@ -265,9 +327,24 @@
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var tg = (window.Telegram || {}).WebApp;
+
+  // ═══ ПОДПИСЬ КНОПКИ НИЖНЕЙ ПОЛОСЫ - ОДНА ДВЕРЬ (закон №40) ═══
+  // У такой кнопки ДВА слоя: значок (виден всегда) и слово (прячется на узком экране,
+  // см. CSS). Голое `btn.textContent = '...'` стирает разметку вместе со слоем, и на
+  // телефоне вместо значка остаётся обрезанная строка. Копий подписи было ШЕСТЬ - у
+  // микрофона три, у показа и камеры по две, - и каждая следующая правка расходилась бы
+  // с остальными молча. Поэтому подпись ставится ТОЛЬКО отсюда.
+  function barLabel(btn, icon, word) {
+    if (!btn) return;
+    btn.textContent = icon;
+    var s = document.createElement('span');
+    s.className = 'lbl';
+    s.textContent = ' ' + word;
+    btn.appendChild(s);
+  }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'b0900d0194f1';
+  var VERSION = '87c2d81f74ce';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -346,8 +423,122 @@
   //: только показываем, если он о нём вообще сообщает.
   var AUDIO_MUST = ['noiseSuppression', 'echoCancellation', 'autoGainControl'];
 
+  // ═══ «ЭТО МОБИЛА» - ОДИН ПРИЗНАК НА ВСЮ СТРАНИЦУ, И ОН НЕ ПРО UserAgent ═══
+  // Тот же факт, по которому прячется показ экрана: `getDisplayMedia` НЕТ ВООБЩЕ в
+  // мобильном вебвью (живая проба Ren 24.08, Android), и это отсутствие API, а не отказ
+  // в разрешении. UA врёт - режим «для компьютеров» на телефоне выдаёт себя за десктоп, -
+  // а наличие метода это факт. Второй признак «мобилы» рядом с этим означал бы два
+  // ответа на один вопрос, и они разошлись бы (закон №40).
+  var HAS_DISPLAY = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+
+  // ═══════════════ ПОРОГИ ШУМОДАВА - ВСЕ В ОДНОМ МЕСТЕ ═══════════════
+  // КАЛИБРУЮТСЯ ПО ЖИВЫМ СЭМПЛАМ, А НЕ ВЫВОДЯТСЯ ИЗ ТЕОРИИ. Числа ниже сняты с одного
+  // разбора (Maxim_noise.ogg, Ren 27.08): отрыв речи от фона 33 дБ, разброс уровня фона
+  // 11.5 дБ (то есть шум НЕСТАЦИОНАРНЫЙ - встроенное подавление такой не берёт), 74%
+  // энергии фона в полосе 100-1000 Гц, там же, где речь. Один сэмпл это не выборка,
+  // поэтому пороги стоят ЗАМЕТНО НИЖЕ измеренного: 6 дБ разброса против 11.5 и 60% полосы
+  // против 74. Следующий живой сэмпл двигает эти две строки, а не код вокруг них.
+  var NS = {
+    //: Ниже этого уровня кадр считаем ПАУЗОЙ, а не речью. Порог ПЛАВАЮЩИЙ - он считается
+    //: от собственного максимума за окно, потому что абсолютное число означало бы «у
+    //: половины людей не работает»: громкость микрофона у всех своя.
+    SPEECH_GAP_DB: 12,
+    //: Сколько дБ между тихими и громкими паузами считаем нестационарностью.
+    SPREAD_DB: 6,
+    //: Какая доля энергии фона обязана лежать в 100-1000 Гц, чтобы это мешало речи.
+    LOW_SHARE: 0.60,
+    LOW_HZ: [100, 1000],
+    //: Совсем тихий фон не повод ничего предлагать: −60 dBFS это уже тишина комнаты.
+    FLOOR_DB: -60,
+    //: Сколько СЕКУНД ПОДРЯД признаки обязаны держаться, прежде чем мы предложим.
+    HOLD_SEC: 8,
+    //: Сколько пауз надо набрать, чтобы вообще судить: по трём кадрам разброс не считают.
+    MIN_PAUSES: 25,
+    //: Как часто смотрим на сигнал. 20 раз в секунду - кадр 50 мс, дешевле некуда.
+    TICK_MS: 50,
+    //: ЗАМЕР ЭФФЕКТА (закон №35). Сколько секунд собираем «до/после» и какое падение
+    //: считаем настоящей работой. Ниже - честно говорим, что не помогло.
+    GAIN_SEC: 6,
+    GAIN_MIN_DB: 3,
+    //: ═══ ПЕРЕГРУЗ МИКРОФОНА - ЭТО ФАКТ, А НЕ НАСТРОЙКА ═══
+    //: `getSettings().autoGainControl === true` означает «АРУ ВКЛЮЧЕНА», а не «громкость
+    //: выровнена». Живой замер Ren дал пик амплитуды 1.456 при норме 1.0 (1% кадров) -
+    //: то есть микрофон хрипел, и по одной настройке мы бы этого не увидели ВООБЩЕ и
+    //: честно промолчали. Поэтому считаем кадры, упёршиеся в потолок, - у самого сигнала.
+    CLIP_PEAK: 0.98,
+    //: Доля таких кадров, начиная с которой это слышно. Ren намерил 1%; порог ниже, но
+    //: не в разы: единичный хлопок не должен объявлять микрофон перегруженным.
+    CLIP_SHARE: 0.005,
+    //: Сколько кадров надо набрать, прежде чем судить, и как часто смотрим.
+    CLIP_MIN: 100,
+    CLIP_MS: 100,
+    //: СТОРОЖ ПРОЦЕССОРА. Доля времени звукового потока, съеденная нашей обработкой.
+    //: Два порога, а не один: с одним сторож хлопает дверью на границе (включил -
+    //: выключил - включил), и человек видит мигание вместо решения.
+    CPU_BAD: 0.80,
+    CPU_OK: 0.55,
+    CPU_HOLD_SEC: 5,
+  };
+  //: СКОЛЬКО ЖИВЁТ ПРОСЬБА АДМИНА. Метаданные приезжают клиенту заново при КАЖДОЙ смене
+  //: любого соседнего признака, и вошедший через час не должен исполнять просьбу, о
+  //: которой все давно забыли. Десять минут - окно, в котором «шумодав всем» ещё догоняет
+  //: тех, кто заходит в ту же шумную комнату.
+  var RNN_ASK_TTL = 600;
+  //: ЧТО ЧЕЛОВЕК РЕШИЛ САМ. Ключ общий на все комнаты, а не на одну: решение про шумодав
+  //: это решение про СВОЙ микрофон и своё устройство, и оно не меняется от того, куда он
+  //: зашёл. Пусто - решения не было, и автоматика вправе включить сама.
+  var RNN_PREF_KEY = 'rtc_rnn_pref';
+
   var room = null, people = {}, micOn = true, recOn = false, djOn = false,
       subOn = false;
+  //: ═══ ШУМОДАВ: СОСТОЯНИЕ ЖИВЁТ СНАРУЖИ КОМНАТЫ, И ЭТО НЕ ВКУСОВЩИНА ═══
+  //: `showRec` вызывается ДО подключения (метаданные приезжают вместе с входом), а сам
+  //: шумодав включается внутри `go()`. Объяви мы эти переменные там - `showRec` падал бы
+  //: `ReferenceError` на КАЖДОМ входе в комнату, где админ уже просил шумодав, и уносил
+  //: бы всё, что регистрируется ниже. Этот класс уже трижды стоил круга (subSticky,
+  //: subNote, dropDj), и лечится он одинаково: состояние снаружи, работа внутри.
+  //: `rnnPump` - тот самый мост: `go()` кладёт туда функцию, `showRec` её дёргает.
+  var RNN_ON = false;              //: реально ли сейчас работает наш шумодав
+  var rnnWant = null;              //: {on, by} - просьба админа, ещё не применённая
+  var rnnAskTs = 0;                //: метка последней ПРОЧИТАННОЙ просьбы
+  var rnnAllOn = false;            //: последняя просьба «всем» была на включение
+  var rnnPump = null;              //: мост из go(): применить просьбу
+  //: ═══ КОМУ ЗАПРЕЩЕНЫ РЕАКЦИИ И ЗВУКИ ═══
+  //: Живёт в метаданных комнаты по той же причине, что список админов: доезжает до
+  //: вошедшего ПОЗЖЕ, а рассылка по каналу данных молчала бы именно ему - то есть
+  //: новичок не знал бы, что соседа заглушили, и продолжал слышать его гонги.
+  var funOff = {};
+
+  //: ═══ ЗАГЛУШЁННОМУ ГОВОРИМ, А НЕ ПРЯЧЕМ ═══
+  //: Исчезнувшая панель читается как «функции нет» (закон №36), и человек пойдёт искать
+  //: поломку. Кнопки остаются на месте, но не отправляют ничего, а строка называет
+  //: причину. Настоящий запрет при этом стоит у ПОЛУЧАТЕЛЕЙ - здесь мы лишь не делаем
+  //: вид, что всё работает.
+  //: ОБЕ ЖИВУТ НА УРОВНЕ МОДУЛЯ, А НЕ ВНУТРИ `go()`, И ЭТО НЕ ОФОРМЛЕНИЕ: их зовёт
+  //: `showRec`, который выполняется ДО подключения (метаданные приезжают вместе с
+  //: входом). Объявление внутри давало бы `ReferenceError` у КАЖДОГО, кто вошёл в
+  //: комнату с уже заглушенным участником, и уносило бы всё, что регистрируется ниже, -
+  //: ровно то, что уже случалось с `subSticky`, `subNote` и `dropDj`.
+  function iAmFunOff() { return !!(myIdent && funOff[String(myIdent)]); }
+
+  function funPaint() {
+    var box = $('reacthint');
+    if (!box) return;
+    var off = iAmFunOff();
+    var card = $('react');
+    if (card) card.classList.toggle('muted', off);
+    box.textContent = off
+      ? 'Реакции и звуки тебе отключил админ комнаты. Кнопки на месте, но соседи их не '
+        + 'услышат - это не поломка.'
+      : '';
+  }
+  //: ПОПРАВКА К ЧАСАМ УСТРОЙСТВА, СЕКУНДЫ. Ноль означает «сервер не сказал» - тогда
+  //: работаем как раньше, но об этом сказано в консоль, а не молча.
+  var SRV_SKEW = 0;
+
+  //: ЕДИНСТВЕННАЯ ДВЕРЬ «СКОЛЬКО СЕЙЧАС ПО СЕРВЕРУ». Вторая копия поправки разошлась бы
+  //: с первой, и половина сравнений считала бы в одной шкале, половина в другой.
+  function srvNow() { return Date.now() / 1000 + SRV_SKEW; }
   //: ЛИПКОЕ ИЗВЕСТИЕ О СУБТИТРАХ ЖИВЁТ РЯДОМ С `subOn`, А НЕ ВНУТРИ КОМНАТЫ. Его читает
   //: `showRec`, который вызывается ДО подключения (метаданные приезжают вместе с входом),
   //: и объявление внутри - это `ReferenceError` на КАЖДОМ входе в комнату с включёнными
@@ -374,14 +565,20 @@
   // (`RemoteAudioTrack.setVolume`), серверной ручки «этому участнику тише» нет вовсе - и
   // правильно, что нет: одному фон мешает, другому нет, и решать это за всех нельзя.
   var DJ_ID = 'bot-dj';                 // identity бота-диджея, тот же, что в rtc_dj.py
-  var DJ_VOL_DEFAULT = 25;              // проценты: заметно тише голоса (условие Ren)
+  // ПРОЦЕНТЫ, И ЭТО ДРОБНОЕ ЧИСЛО: у логарифмической шкалы низ начинается с 0.1%, а
+  // целое там округлялось бы в ноль, то есть в «радио не играет».
+  var DJ_VOL_DEFAULT = 2;               // фоном под разговор (замер Ren: 1% уже громко)
   var djTrack = null;
   var djVol = DJ_VOL_DEFAULT;
   try {
       // ВЫБОР ЧЕЛОВЕКА ПЕРЕЖИВАЕТ ПЕРЕОТКРЫТИЕ: комнату открывают по несколько раз за
       // созвон, и каждый раз двигать ползунок заново - это работа, переложенная на него.
       var _sv = localStorage.getItem('rtc_dj_vol');
-      if (_sv !== null && _sv !== '') djVol = Math.max(0, Math.min(100, parseInt(_sv, 10) || 0));
+      // parseFloat, А НЕ parseInt: сохранённые 0.4% иначе прочитались бы нулём, и радио
+      // молча замолкало бы при каждом переоткрытии комнаты.
+      if (_sv !== null && _sv !== '') {
+        djVol = Math.max(0, Math.min(100, parseFloat(_sv) || 0));
+      }
   } catch (e) { }
 
   function isDj(p) {
@@ -395,13 +592,26 @@
   //: клиенте, который даёт звук ПОСЛЕ того, как дорожки уже нет; заодно повторная
   //: подписка на ту же дорожку плодила ВТОРОЙ элемент, то есть двойной звук.
   var attached = {};                    // sid -> [элементы]
+  //: ═══ ЧЬИХ ДОРОЖЕК МЫ ДЕРЖИМ ЗВУК ═══
+  //: ЧЕТВЁРТЫЙ ЗАХОД ПРО РАДИО, И ПРИЧИНА БЫЛА В ЭТОМ. `dropDj` снимал ОДНУ запомненную
+  //: дорожку (`djTrack`), а их за созвон бывает НЕСКОЛЬКО: каждая смена станции - это
+  //: новый процесс, новый вход и новый sid. Порядок событий у клиентов РАЗНЫЙ, и когда
+  //: `TrackSubscribed` новой приходил РАНЬШЕ `TrackUnsubscribed` старой, `djTrack` уже
+  //: указывал на новую - старый элемент не снимал никто и он играл дальше. Отсюда и
+  //: «у ЧАСТИ участников»: это не везение, а гонка порядка событий.
+  //: ПОЭТОМУ ПОМНИМ ВСЕ ДОРОЖКИ ДИДЖЕЯ, а не последнюю.
+  var djSids = {};                      // sid -> 1, пока звук диджея у нас на странице
 
-  function attachTrack(track) {
+  function attachTrack(track, isDjTrack) {
       var sid = String(track.sid || ('x' + Math.random()));
       detachTrack(track);               // второй элемент на ту же дорожку - двойной звук
       var el = track.attach();
       el.setAttribute('playsinline', '');
       el.style.display = 'none';
+      // ПОМЕТКА В САМОМ ЭЛЕМЕНТЕ, А НЕ ТОЛЬКО В РЕЕСТРЕ: реестр живёт в памяти вкладки и
+      // теряется при любой нашей ошибке, а элемент - это то, что РЕАЛЬНО звучит. По этой
+      // метке «убрать весь звук радио» выполнимо даже когда реестр разошёлся с DOM.
+      if (isDjTrack) { el.dataset.dj = '1'; djSids[sid] = 1; }
       document.body.appendChild(el);
       attached[sid] = (attached[sid] || []).concat([el]);
       return el;
@@ -424,41 +634,97 @@
           if (e && e.remove) { e.remove(); n++; }
       });
       delete attached[sid];
+      delete djSids[sid];
+      return n;
+  }
+
+  //: СНЯТЬ ВЕСЬ ЗВУК РАДИО, СКОЛЬКО БЫ ДОРОЖЕК ОТ НЕГО НИ ОСТАЛОСЬ. Идём двумя путями и
+  //: оба нужны: по реестру (знаем sid) и ПО DOM (элемент помечен `data-dj`). Второй - на
+  //: случай, когда реестр разошёлся с тем, что звучит: именно этот случай четыре раза
+  //: подряд и приезжал живым отказом, а «у меня всё сходится» его не ловит.
+  function dropDjAudio() {
+      var n = 0;
+      Object.keys(djSids).forEach(function (sid) {
+          (attached[sid] || []).forEach(function (e) {
+              try { e.pause(); } catch (e2) {}
+              try { e.srcObject = null; } catch (e2) {}
+              if (e && e.remove) { e.remove(); n++; }
+          });
+          delete attached[sid];
+          delete djSids[sid];
+      });
+      var left = document.querySelectorAll('audio[data-dj="1"]');
+      for (var i = 0; i < left.length; i++) {
+          try { left[i].pause(); } catch (e3) {}
+          try { left[i].srcObject = null; } catch (e3) {}
+          left[i].remove(); n++;
+      }
       return n;
   }
 
   //: ВЫКЛЮЧИТЬ РАДИО. Провязывается там, где есть `ask`; до этого честно говорит, что
   //: не может, - а не молчит (молчание после тапа читается как «сломалось»).
   var djOff = null;
+  //: АДМИНСКОЕ ДЕЙСТВИЕ НАД УЧАСТНИКОМ. Той же дорогой и по той же причине: настоящий
+  //: mute/kick умеет ТОЛЬКО серверный API LiveKit, а ключ к нему есть у бота.
+  var admDo = null;
 
   function dropDj() {
       // ВЫКЛЮЧЕНИЕ РАДИО - СОСТОЯНИЕ КОМНАТЫ, А НЕ СОБЫТИЕ ПОДПИСКИ. `TrackUnsubscribed`
       // может не прийти вовсе (процесс убит, соединение оборвалось), а признак `dj` в
       // метаданных приходит ВСЕМ и ВСЕГДА - на него и опираемся.
-      detachTrack(djTrack);
+      // СНИМАЕМ ВСЁ РАДИО, А НЕ ПОСЛЕДНЮЮ ДОРОЖКУ: см. `dropDjAudio`.
+      dropDjAudio();
       djTrack = null;
       showDjVol(false);
   }
 
   function applyDjVolume() {
-      if (!djTrack || !djTrack.setVolume) return false;
-      try { djTrack.setVolume(djVol / 100); return true; } catch (e) { return false; }
+      // ГРОМКОСТЬ ТОЖЕ КО ВСЕМУ, ЧТО ЗВУЧИТ. Ползунок, двигающий одну дорожку из двух,
+      // выглядит как «регулятор не работает»: человек тянет вниз, а фон остаётся.
+      var did = false;
+      if (djTrack && djTrack.setVolume) {
+          try { djTrack.setVolume(djVol / 100); did = true; } catch (e) {}
+      }
+      var els = document.querySelectorAll('audio[data-dj="1"]');
+      for (var i = 0; i < els.length; i++) {
+          try { els[i].volume = Math.max(0, Math.min(1, djVol / 100)); did = true; } catch (e2) {}
+      }
+      return did;
   }
 
-  // ═══ ШКАЛА ГРОМКОСТИ: УХО СЛЫШИТ ЛОГАРИФМИЧЕСКИ, ПОЛЗУНОК ОБЯЗАН ТОЖЕ ═══
-  // ЖИВОЙ ОТЗЫВ REN: «прыгает через 5%: 0 -> 5 -> 10, а фоном под разговор нужно 1-3%».
-  // Ровный шаг в 5% одинаково бесполезен на обоих концах: внизу он перескакивает ВСЁ
-  // полезное, вверху 60% против 65% ухо почти не различает. Поэтому ПОЗИЦИЯ ползунка и
-  // ГРОМКОСТЬ - разные величины: 28 делений, первые десять идут ПО ОДНОМУ проценту.
-  //: позиция 0..9 -> 0..9%, дальше по 5%: 10->10%, 11->15%, ... 28->100%.
+  // ═══ ШКАЛА ГРОМКОСТИ ЛОГАРИФМИЧЕСКАЯ, И НАЧИНАЕТСЯ ОНА С 0.1% ═══
+  // ПЕРВЫЙ ЗАХОД (шаг 1% внизу, 5% наверху) отменён живым прогоном Ren: «даже 1% громко».
+  // Это не придирка, а свойство слуха: громкость воспринимается ЛОГАРИФМИЧЕСКИ, и на
+  // линейной шкале весь фоновый диапазон умещается в одно-два первых деления - то есть
+  // его там нет вовсе. Тридцать делений по ~2 дБ покрывают 60 дБ: от 0.1% до 100%.
+  //: позиция 0 - ВЫКЛЮЧЕНО (настоящий ноль, а не «очень тихо»);
+  //: позиции 1..30 - от 0.1% до 100%, каждый шаг умножает громкость на ~1.26.
+  var VOL_POS_MAX = 30;
+
   function volOfPos(pos) {
-    pos = Math.max(0, Math.min(28, parseInt(pos, 10) || 0));
-    return pos <= 9 ? pos : Math.min(100, 10 + (pos - 10) * 5);
+    pos = Math.max(0, Math.min(VOL_POS_MAX, parseInt(pos, 10) || 0));
+    if (pos <= 0) return 0;
+    var v = 100 * Math.pow(10, -3 * (1 - (pos - 1) / (VOL_POS_MAX - 1)));
+    // ТОЧНОСТЬ ОКРУГЛЕНИЯ ЗАВИСИТ ОТ МЕСТА НА ШКАЛЕ, и это не педантизм: до десятой доли
+    // первые ШЕСТЬ делений схлопывались в три одинаковых числа, и ползунок читался как
+    // сломанный - двигаешь, а цифра та же. Наверху шкалы вторая цифра, наоборот, шум.
+    return v < 1 ? Math.round(v * 100) / 100 : Math.round(v * 10) / 10;
   }
 
   function posOfVol(vol) {
-    vol = Math.max(0, Math.min(100, parseInt(vol, 10) || 0));
-    return vol <= 9 ? vol : Math.min(28, 10 + Math.round((vol - 10) / 5));
+    vol = Math.max(0, Math.min(100, parseFloat(vol) || 0));
+    if (vol <= 0) return 0;
+    var p = 1 + Math.round((Math.log(vol / 100) / Math.log(10) / 3 + 1) * (VOL_POS_MAX - 1));
+    return Math.max(1, Math.min(VOL_POS_MAX, p));
+  }
+
+  //: ЧИСЛО ЧЕЛОВЕКУ: внизу шкалы десятая доля процента - значащая цифра, наверху она шум.
+  function fmtVol(v) {
+    if (!v) return 'выкл';
+    // БЕЗ ХВОСТОВЫХ НУЛЕЙ: «0.10%» и «0.1%» это одно число, а второе читается быстрее.
+    return (v < 1 ? String(Math.round(v * 100) / 100)
+                  : String(Math.round(v))) + '%';
   }
 
   function showDjVol(on) {
@@ -468,10 +734,11 @@
       if (!on) return;
       var sl = $('djv');
       sl.value = String(posOfVol(djVol));
-      $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
+      $('djvlab').textContent = 'Громкость радио: ' + fmtVol(djVol) + ' (фоном под разговор)';
       sl.oninput = function () {
           djVol = volOfPos(sl.value);
-          $('djvlab').textContent = 'Громкость радио: ' + djVol + '% (фоном под разговор)';
+          $('djvlab').textContent = 'Громкость радио: ' + fmtVol(djVol)
+            + ' (фоном под разговор)';
           // ПРИМЕНЯЕМ СРАЗУ, А НЕ ПО ОТПУСКАНИЮ: человек ведёт ползунок и слушает, что
           // получается, - иначе он подбирает значение вслепую.
           applyDjVolume();
@@ -513,6 +780,15 @@
   // сервером на первом же падении Egress, и кнопка предлагала бы остановить то, что уже
   // не пишется. Метаданные ставит БОТ - он же владеет записью (закон №40: одна дверь).
   var lastMeta = '';
+  // КТО Я И ЧТО МНЕ РАЗРЕШЕНО - ДВА РАЗНЫХ ФАКТА. Первый знает LiveKit (identity в
+  // токене), второй живёт в метаданных комнаты и ставится БОТОМ: страница о правах не
+  // решает ничего, она только показывает (закон №32).
+  var myIdent = '';
+  var iAmAdm = false;
+  var lockOn = false;
+  // ЗАМОК КАСАЕТСЯ ПАНЕЛИ, КОТОРАЯ ЖИВЁТ В ДРУГОЙ ОБЛАСТИ ВИДИМОСТИ. Крючок вместо
+  // прямого вызова: showRec работает и ДО подключения, когда панели ещё нет вовсе.
+  var lockPaint = function () {};
   function showRec(meta) {
     // ПОСЛЕДНЕЕ СОСТОЯНИЕ ПОМНИМ, потому что кнопка появляется ПОЗЖЕ первой отрисовки:
     // порядок строк в `go()` не должен решать, что написано на кнопке. Вошедший при
@@ -573,7 +849,271 @@
       d.classList.toggle('on', djOn);
       d.textContent = djOn ? ('⏹ Выключить радио (' + m.dj + ')') : '📻 Включить радио';
     }
+    // ═══ АДМИН КОМНАТЫ: СПИСОК ЖИВЁТ В МЕТАДАННЫХ, А НЕ У НАС ═══
+    // Он обязан доезжать до вошедшего ПОЗЖЕ ровно так же, как признак записи, - рассылка
+    // по каналу данных молчала бы именно ему. Сравнение ТОЧНОЕ (закон №11): identity у
+    // веб-гостя начинается с `web-`, и подстрочный матч однажды выдал бы ему права.
+    var _adm = (m && m.adm) || [];
+    iAmAdm = !!(myIdent && _adm.map(String).indexOf(String(myIdent)) >= 0);
+    $('admin').style.display = iAmAdm ? '' : 'none';
+    // ЗАМОК - ПЕРЕКЛЮЧАТЕЛЬ (закон №55): подпись называет РЕЗУЛЬТАТ тапа, а не имя
+    // состояния, иначе запертую доску нечем отпереть и совместная работа кончается.
+    var _wasLock = lockOn;
+    lockOn = !!(m && m.lock);
+    $('admlock').textContent = lockOn ? '🔓 Вернуть доску и график'
+                                      : '🔒 Убрать доску и график';
+    if (lockOn !== _wasLock || meta === undefined) lockPaint();
+    // ═══ ПРОСЬБА АДМИНА ПРО ШУМОДАВ: ЧИТАЕМ ЗДЕСЬ, ПРИМЕНЯЕМ В go() ═══
+    // Метаданные - ЕДИНСТВЕННЫЙ канал от бота до чужого клиента (серверного «включи ему
+    // шумодав» у LiveKit нет вовсе), и он же единственный, кто догоняет вошедшего позже.
+    // МЕТКА ВРЕМЕНИ ОБЯЗАТЕЛЬНА, И БЕЗ НЕЁ ФИЧА РАБОТАЕТ НАОБОРОТ: эта функция вызывается
+    // при КАЖДОЙ смене ЛЮБОГО соседнего признака (запись, радио, замок, субтитры), то
+    // есть одна и та же просьба приезжает снова и снова. Без метки человек, выключивший
+    // шумодав у себя, получал бы его обратно на первом же чужом тапе - и правило
+    // «локальное побеждает» держалось бы на удаче.
+    // ═══ КОМУ ЗАПРЕЩЕНЫ РЕАКЦИИ И ЗВУКИ ═══
+    // Сравнение ТОЧНОЕ и по identity (закон №11): у веб-гостя оно начинается с `web-`, и
+    // подстрочный матч однажды заглушил бы не того.
+    funOff = {};
+    ((m && m.fun) || []).forEach(function (x) { funOff[String(x)] = 1; });
+    funPaint();
+    var _r = (m && m.rnn) || null;
+    rnnAllOn = !!(_r && _r.all && _r.on);
+    var _ar = $('admrnn');
+    if (_ar) {
+      _ar.classList.toggle('on', rnnAllOn);
+      _ar.textContent = rnnAllOn ? '🔊 Снять шумодав со всех' : '🔇 Шумодав всем';
+    }
+    var _aw = $('admrnnwhy');
+    if (_aw) {
+      _aw.textContent = rnnAllOn
+        ? ('Попрошено всем включить шумодав' + (_r.by ? ' (' + _r.by + ')' : '')
+           + '. Это ПРОСЬБА: делает её страница каждого, и каждый вправе выключить у себя.')
+        : 'Просит всех включить свой шумодав. Выключить у себя может каждый.';
+    }
+    // КТО Я - МОЖЕТ БЫТЬ ЕЩЁ НЕИЗВЕСТНО: `showRec` выполняется и ДО подключения, а
+    // `myIdent` появляется после него. Съесть метку в этот момент значило бы навсегда
+    // потерять адресную просьбу: она числилась бы прочитанной, а исполнить её было не с
+    // чем. Ничего не трогаем - сразу после подключения `showRec()` зовётся ещё раз.
+    if (_r && Number(_r.ts || 0) > rnnAskTs && myIdent) {
+      rnnAskTs = Number(_r.ts) || 0;
+      // ПРОСЬБУ СЧИТАЕМ ПРОЧИТАННОЙ В ЛЮБОМ СЛУЧАЕ, даже чужую: иначе следующая смена
+      // соседнего признака принесёт её снова и мы применим её задним числом.
+      var _mine = !!(_r.all || (myIdent && String(_r.to || '') === String(myIdent)));
+      // СТАРУЮ НЕ ИСПОЛНЯЕМ. Вошедший через час не должен получать шумодав по просьбе, о
+      // которой все давно забыли; окно названо константой, а не подобрано на глаз.
+      // ВОЗРАСТ СЧИТАЕМ В ОДНОЙ ШКАЛЕ С МЕТКОЙ. И ОТРИЦАТЕЛЬНЫЙ ВОЗРАСТ - НЕ ПОВОД
+      // ОТКАЗЫВАТЬ: «просьба из будущего» означает только расхождение часов, а не то, что
+      // человек её не отправлял. Отбрасывать по нему значило бы вернуть ту же молчаливую
+      // поломку, только с другой стороны.
+      var _age = srvNow() - (Number(_r.ts) || 0);
+      var _fresh = _age <= RNN_ASK_TTL;
+      if (_mine && _fresh) {
+        rnnWant = { on: !!_r.on, by: String(_r.by || '') };
+        if (rnnPump) rnnPump();
+      }
+    }
   }
+
+  // ═══ ВИДЕО: ОДНА ДВЕРЬ НА СВОЁ И ЧУЖОЕ, И ТРИ РАСКЛАДКИ ═══
+  // Своё видео человек обязан видеть тоже: иначе «что именно я показываю - ту вкладку или
+  // весь экран?» можно спросить только у соседей, посреди разговора.
+  //: [{t: дорожка, el: обёртка}] - помним ДОРОЖКУ, а не sid: у своей публикации sid
+  //: появляется не сразу, и поиск по нему снимал бы не то (а чаще - ничего).
+  var vids = [];
+  var layMode = 'auto';
+  var LAY_NAMES = { auto: 'авто', grid: 'сетка', spk: 'крупно' };
+
+  function addVideo(track, nm, mine, pid) {
+    var w = document.createElement('div');
+    w.className = 'vwrap';
+    if (pid) w.dataset.pid = pid;
+    if (mine) w.dataset.me = '1';
+    var v = track.attach();
+    v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
+    w.appendChild(v);
+    // ПОДПИСЬ ОБЯЗАТЕЛЬНА У СВОЕГО ОКНА: без неё человек видит свой же экран внутри
+    // своего экрана и решает, что это чужой показ (и наоборот).
+    var tag = document.createElement('span');
+    tag.className = 'vnm';
+    tag.textContent = mine ? 'Ты · так тебя видят' : (nm || 'Участник');
+    w.appendChild(tag);
+    $('screens').appendChild(w);
+    vids.push({ t: track, el: w });
+    layPaint();
+  }
+
+  function dropVideo(track) {
+    for (var i = vids.length - 1; i >= 0; i--) {
+      if (vids[i].t !== track) continue;
+      try { track.detach(vids[i].el.querySelector('video')); } catch (e) {}
+      vids[i].el.remove();
+      vids.splice(i, 1);
+    }
+    layPaint();
+  }
+
+  function layPaint() {
+    var box = $('screens');
+    var n = vids.length;
+    // «АВТО» - ЭТО НЕ ЧЕТВЁРТАЯ РАСКЛАДКА, А ПРАВИЛО: одно видео во всю ширину, два и
+    // больше - сетка. Человек выбирает только тогда, когда правило ему не подходит.
+    var mode = (layMode === 'auto') ? (n >= 2 ? 'grid' : 'one') : layMode;
+    box.className = (mode === 'grid') ? 'grid' : (mode === 'spk' ? 'spk' : '');
+    if (mode === 'spk') {
+      // КРУПНО - ТОТ, КТО ГОВОРИТ. Молчат все - первый: пустое место вместо картинки
+      // читается как поломка.
+      var big = null;
+      vids.forEach(function (r) {
+        var pid = r.el.dataset.pid || '';
+        if (!big && pid && people[pid] && people[pid].speaking) big = r;
+      });
+      if (!big) big = vids[0];
+      vids.forEach(function (r) {
+        r.el.classList.toggle('big', r === big);
+        r.el.classList.toggle('small', r !== big);
+      });
+    } else {
+      vids.forEach(function (r) { r.el.classList.remove('big'); r.el.classList.remove('small'); });
+    }
+    var b = $('lay');
+    if (b) {
+      // РАСКЛАДЫВАТЬ НЕЧЕГО - КНОПКИ НЕТ. Она бы переключала невидимое и читалась как
+      // сломанная (закон №36: причина рядом, а не молчание после тапа).
+      b.style.display = n ? '' : 'none';
+      b.textContent = '🔲 Раскладка: ' + LAY_NAMES[layMode];
+      b.classList.toggle('on', layMode !== 'auto');
+    }
+  }
+
+  // ═══ ВО ВЕСЬ ЭКРАН: У TELEGRAM СВОЙ API, У БРАУЗЕРА СВОЙ ═══
+  // Кнопка появляется ТОЛЬКО там, где хоть один из них есть: на клиенте старее Bot API 8.0
+  // её быть не должно вовсе - кнопка, после которой ничего не происходит, хуже отсутствующей.
+  var fullOn = false;
+
+  function fullCan() {
+    return !!(tg && typeof tg.requestFullscreen === 'function')
+        || !!(document.documentElement && document.documentElement.requestFullscreen);
+  }
+
+  function fullPaint() {
+    var b = $('full');
+    if (!b) return;
+    b.style.display = fullCan() ? '' : 'none';
+    b.classList.toggle('on', fullOn);
+    b.textContent = fullOn ? '⛶ Свернуть' : '⛶ Во весь экран';
+  }
+
+  // ═══ КАЧЕСТВО СВЯЗИ: ЦИФРЫ ВМЕСТО «У МЕНЯ ЗАИКАЕТСЯ» ═══
+  // ЖИВОЙ СОЗВОН НЕСКОЛЬКИХ ЧЕЛОВЕК (Ren 27.08): «непонятно, у кого плохо со связью».
+  // По жалобе делать нечего: она не говорит НИ КТО, НИ НАСКОЛЬКО. Пороги названы им же -
+  // потери больше 2% и джиттер больше 30 мс.
+  //: ПОТЕРИ СЧИТАЮТСЯ ЗА ОКНО, А НЕ ОТ НАЧАЛА СОЗВОНА. Накопленный процент за час
+  //: показывает историю, а вопрос у человека про СЕЙЧАС: одна плохая минута в начале
+  //: разговора не должна красить весь остаток.
+  var LOSS_BAD = 2, JIT_BAD = 30, STAT_EVERY = 10000;
+  var statPrev = {};          // identity -> {lost, recv}
+  var statLast = {};          // identity -> {loss, jit, rtt} последнего окна
+  var statSaid = false;       // говорили ли уже, что статистики у клиента нет
+
+  function statFmt(nm, q) {
+    var bad = (q.loss > LOSS_BAD) || (q.jit > JIT_BAD);
+    return nm + ': ' + q.loss.toFixed(1) + '% потерь, джиттер ' + Math.round(q.jit) + ' мс'
+      + (q.rtt ? ', RTT ' + Math.round(q.rtt) + ' мс' : '') + (bad ? ' ⚠️' : '');
+  }
+
+  async function statsOnce() {
+    if (!room || !connected) return;
+    var rows = [];
+    var ps = [];
+    room.remoteParticipants.forEach(function (p) { ps.push(p); });
+    for (var i = 0; i < ps.length; i++) {
+      var p = ps[i];
+      var pubs = [];
+      var m = p.trackPublications || p.tracks;
+      if (m && m.forEach) m.forEach(function (pub) { pubs.push(pub); });
+      var got = null;
+      for (var k = 0; k < pubs.length; k++) {
+        var t = pubs[k].track;
+        // ЧИСЛА БЕРЁМ У ТОГО, КТО ИХ ЗНАЕТ, И НЕ ВЫДУМЫВАЕМ, ЕСЛИ ОН МОЛЧИТ (закон №22):
+        // у старого клиента этого метода нет вовсе, и «0% потерь» было бы враньём.
+        if (!t || typeof t.getRTCStatsReport !== 'function') continue;
+        var rep2 = null;
+        try { rep2 = await t.getRTCStatsReport(); } catch (e) { rep2 = null; }
+        if (!rep2 || !rep2.forEach) continue;
+        var lost = 0, recv = 0, jit = 0, rtt = 0, seen = false;
+        rep2.forEach(function (st) {
+          if (st.type === 'inbound-rtp') {
+            seen = true;
+            lost += Number(st.packetsLost || 0);
+            recv += Number(st.packetsReceived || 0);
+            jit = Math.max(jit, Number(st.jitter || 0) * 1000);
+          } else if (st.type === 'candidate-pair' && st.currentRoundTripTime) {
+            rtt = Math.max(rtt, Number(st.currentRoundTripTime) * 1000);
+          } else if (st.type === 'remote-inbound-rtp' && st.roundTripTime) {
+            rtt = Math.max(rtt, Number(st.roundTripTime) * 1000);
+          }
+        });
+        if (!seen) continue;
+        var prev = statPrev[p.identity] || { lost: 0, recv: 0 };
+        var dl = Math.max(0, lost - prev.lost), dr = Math.max(0, recv - prev.recv);
+        statPrev[p.identity] = { lost: lost, recv: recv };
+        got = { loss: (dl + dr) ? (100 * dl / (dl + dr)) : 0, jit: jit, rtt: rtt };
+        break;
+      }
+      if (!got) continue;
+      statLast[p.identity] = got;
+      // ИМЯ БЕРЁМ ИЗ СПИСКА КОМНАТЫ, А НЕ У `nameOf`: та живёт в области видимости `go()`,
+      // и модульная функция её не видит - вышло бы «nameOf is not a function» на первом
+      // же тике, то есть строка связи не появилась бы НИ РАЗУ.
+      var _nm = (people[p.identity] && people[p.identity].name)
+             || human(p.name, p.identity);
+      rows.push(statFmt(_nm, got));
+    }
+    var box = $('connq');
+    if (box) {
+      // МОЛЧАНИЕ КЛИЕНТА НАЗЫВАЕТСЯ ОДИН РАЗ, А НЕ КАЖДЫЕ ДЕСЯТЬ СЕКУНД.
+      if (!rows.length && !statSaid) {
+        statSaid = true;
+        box.textContent = ps.length
+          ? 'Связь: клиент не отдаёт статистику - цифр по участникам не будет.'
+          : '';
+      } else if (rows.length) {
+        statSaid = false;
+        box.textContent = 'Связь (за 10 с): ' + rows.join(' · ');
+      }
+    }
+    return rows;
+  }
+
+  // ═══ ТИК ЖИВЁТ РЯДОМ С ЗАМЕРОМ, А НЕ ВНУТРИ ВЕТКИ ПОДПИСИ ═══
+  // Собирает цифры КАЖДЫЙ (это его канал), а отправляет боту только админ: пришли снимок
+  // все, в логе лежало бы N копий одного разговора. Внутри `if (initData)` тик был бы
+  // невидим соседям - в частности, приходу нового участника, а это ровно тот момент,
+  // когда его связь интересна.
+  var _statTick = 0;
+  async function statTick() {
+    var rows = await statsOnce();
+    _statTick++;
+    if (!initData || !iAmAdm || !rows || !rows.length || (_statTick % 6)) return;
+    try {
+      var r = await fetch(API + '/signal', {
+        method: 'POST',
+        headers: { 'X-Init-Data': initData, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'rtcstat', room: ROOM, rows: rows.slice(0, 20) }),
+      });
+      // ═══ НЕУДАЧА НЕ ЛОМАЕТ РАЗГОВОР, НО И НЕ ИСЧЕЗАЕТ БЕССЛЕДНО ═══
+      // Строка связи на экране считается локально и работает при любом исходе, поэтому
+      // человеку тут говорить нечего. А вот пустой `catch {}` означал бы, что «в логе нет
+      // связи» и «Worker выложен старой версией и про `rtcstat` не знает» выглядят
+      // одинаково, - а разбор начинается ровно с этого различия.
+      if (!r.ok) console.warn('[rtcstat] ящик не принял: HTTP', r.status);
+    } catch (e) { console.warn('[rtcstat] не отправилось:', e); }
+  }
+  // ПЕРВЫЙ ЗАМЕР - СРАЗУ, А НЕ ЧЕРЕЗ ОКНО. Ждать десять секунд пустой строки человек
+  // читает как «статистики нет»; первое окно короче, и это честно - оно и правда короче.
+  setTimeout(statTick, 1500);
+  setInterval(statTick, STAT_EVERY);
 
   // СКОЛЬКО ЧЕЛОВЕК В КОМНАТЕ - ОТДЕЛЬНОЙ СТРОКОЙ И ВСЕГДА. Список из одной строки «Ты»
   // не отвечает на вопрос «я тут один или другие ещё не зашли»: это два разных решения -
@@ -603,9 +1143,20 @@
       var q2 = ids.filter(function (x) { return people[x].hand; })
                   .sort(function (a, b) { return people[a].hand - people[b].hand; });
       var pos = q2.indexOf(id);
+      // ═══ ЗНАЧОК ШУМОДАВА - ТОЛЬКО АДМИНУ, И ЭТО НЕ СЕКРЕТНОСТЬ, А ЧИСТОТА СПИСКА ═══
+      // Остальным он не отвечает ни на один вопрос: своё состояние человек видит на своей
+      // же кнопке, а чужое ему нечем изменить. Админу же это ЕДИНСТВЕННЫЙ способ увидеть
+      // ФАКТ вместо своей отправленной просьбы.
+      // «Неизвестно» отличается от «выключен»: сосед со старой страницей про шумодав не
+      // рассказывает вовсе, и молчание не значит «у него выключено».
+      var _rn = (iAmAdm && !p.me)
+        ? (p.rnn === undefined ? '<span class="hand">🔇?</span> '
+                               : (p.rnn ? '<span class="hand">🔇</span> ' : ''))
+        : '';
       row.innerHTML = '<span class="dot' + (p.speaking ? ' on' : '') + '"></span>'
         + '<span class="nm"></span>'
         + (pos >= 0 ? '<span class="hand">✋ ' + (pos + 1) + '</span> ' : '')
+        + _rn
         + '<span class="me">' + (p.me ? 'ты' : (p.muted ? 'микрофон выкл' : '')) + '</span>';
       row.querySelector('.nm').textContent = p.name;
       // ═══ ДЕЙСТВИЯ НАД УЧАСТНИКОМ ═══
@@ -653,6 +1204,51 @@
       box.appendChild(nt);
       return box;
     }
+    // ═══ АДМИН МОЖЕТ ПО-НАСТОЯЩЕМУ, ОСТАЛЬНЫЕ - ПРОСЯТ ═══
+    // Разница не в вежливости, а в том, ЧТО ФИЗИЧЕСКИ УМЕЕТ КЛИЕНТ: выключить чужой
+    // микрофон у livekit-client двери нет вовсе, это только серверный вызов. Поэтому
+    // админские кнопки идут через ящик к боту, а право всё равно проверяет ОН (закон
+    // №32) - здесь решается лишь, что показывать.
+    if (iAmAdm && admDo) {
+      // ═══ ШУМОДАВ У УЧАСТНИКА - ПЕРЕКЛЮЧАТЕЛЬ, А НЕ ОДНОСТОРОННЯЯ КНОПКА (закон №55) ═══
+      // Подпись называет РЕЗУЛЬТАТ тапа и считается от ФАКТИЧЕСКОГО состояния, которое
+      // прислал он сам. Считай мы её от последней отправленной просьбы, кнопка врала бы
+      // ровно у того, кто просьбу не исполнил или отменил у себя.
+      // ГРАНИЦА НАЗВАНА ЧЕСТНО НИЖЕ, В ПОДПИСИ: это тоже просьба, только с настоящим
+      // гейтом. Включает шумодав его страница, и выключить у себя он может всегда.
+      var _rnOn = !!p.rnn;
+      var rb = document.createElement('button');
+      rb.className = 'adm';
+      rb.textContent = _rnOn ? '🔊 Снять шумодав' : '🔇 Включить шумодав';
+      rb.onclick = function () {
+        pactFor = ''; draw();
+        admDo(_rnOn ? 'rnn_off' : 'rnn_on', id, p.name);
+      };
+      box.appendChild(rb);
+      // ═══ РЕАКЦИИ И ЗВУКИ - ПЕРЕКЛЮЧАТЕЛЬ, И ОБРАТНЫЙ ПУТЬ ОБЯЗАТЕЛЕН (закон №55) ═══
+      // Заглушить человека навсегда одним тапом нельзя: он перестанет быть участником
+      // разговора, а вернуть его будет нечем до конца созвона.
+      var _fOff = !!funOff[String(id)];
+      var fb = document.createElement('button');
+      fb.className = 'adm';
+      fb.textContent = _fOff ? '🔊 Вернуть реакции' : '🙊 Запретить реакции и звуки';
+      fb.onclick = function () {
+        pactFor = ''; draw();
+        admDo(_fOff ? 'fun_on' : 'fun_off', id, p.name);
+      };
+      box.appendChild(fb);
+      [['🔇 Заглушить', 'mute'], ['🚪 Отключить', 'kick'],
+       ['👑 Сделать админом', 'admin']].forEach(function (a) {
+        var b = document.createElement('button');
+        b.className = 'adm';
+        b.textContent = a[0];
+        b.onclick = function () {
+          pactFor = ''; draw();
+          admDo(a[1], id, p.name);
+        };
+        box.appendChild(b);
+      });
+    }
     [['🔇 Попросить приглушиться', 'quiet'],
      ['🚪 Попросить выйти', 'bye']].forEach(function (a) {
       var b = document.createElement('button');
@@ -671,8 +1267,14 @@
     // отправлена просьба, хуже отсутствующей кнопки - человек решит, что сломалось.
     var note = document.createElement('p');
     note.className = 'me';
-    note.textContent = 'Это ПРОСЬБЫ: у него всплывёт окно, и он решает сам. Выключить '
-      + 'чужой микрофон или выставить из комнаты я не умею - и не хочу уметь.';
+    // ТЕКСТ ОТВЕЧАЕТ СОСТОЯНИЮ, А НЕ ПОРЯДКУ СТРОК: у админа на экране стоят ОБА ряда
+    // кнопок, и общая подпись «это просьбы» врала бы про верхний.
+    note.textContent = iAmAdm
+      ? ('Заглушить и отключить - настоящие: их выполняет сервер. Шумодав - просьба с '
+         + 'настоящим гейтом: включает его страница участника, и выключить у себя он '
+         + 'может всегда. Нижние - ПРОСЬБЫ: у него всплывёт окно, и он решает сам.')
+      : ('Это ПРОСЬБЫ: у него всплывёт окно, и он решает сам. По-настоящему заглушить '
+         + 'или отключить может только админ комнаты.');
     box.appendChild(note);
     return box;
   }
@@ -940,8 +1542,15 @@
         // ничем, а соседям по комнате надо знать, кто говорит.
         var nm = q.get('name') || '';
         if (!nm) { try { nm = (prompt('Как тебя звать в комнате?') || '').slice(0, 40); } catch (e) {} }
+        // ═══ СВОЁ МЕСТО ВОЗВРАЩАЕМ, А НЕ ЗАНИМАЕМ ВТОРОЕ ═══
+        // Ссылка отдаёт десять мест, и перезагрузка (в том числе НАША, ради обновления
+        // версии) съедала бы по одному. Строка места случайная, живёт ТОЛЬКО здесь и
+        // наружу не уезжает - вернуть её может лишь этот браузер.
+        var _seat = '';
+        try { _seat = localStorage.getItem('rtc_seat_' + ROOM) || ''; } catch (e) {}
         r = await fetch(API + '/rtc/web?t=' + encodeURIComponent(WEB)
-                        + (nm ? '&name=' + encodeURIComponent(nm) : ''));
+                        + (nm ? '&name=' + encodeURIComponent(nm) : '')
+                        + (_seat ? '&seat=' + encodeURIComponent(_seat) : ''));
       } else {
         r = await fetch(API + '/rtc/token?room=' + encodeURIComponent(ROOM), {
           headers: { 'X-Init-Data': initData },
@@ -956,15 +1565,73 @@
     try { j = await r.json(); } catch (e) { j = null; }
     if (!r.ok || !j || !j.token) {
       sub('Войти не вышло');
-      // ОТКАЗ НАЗЫВАЕТ ПРИЧИНУ СЕРВЕРА, А НЕ «ошибка». Код без текста это чёрный ящик.
-      say('Сервер отказал (' + r.status + '): ' + ((j && (j.why || j.error)) || 'без причины'),
-          true);
+      // ═══ ОТКАЗ НАЗЫВАЕТ ПРИЧИНУ ЧЕЛОВЕЧЕСКИ И ГОВОРИТ, ЧТО ДЕЛАТЬ ═══
+      // ЖИВОЙ ОТКАЗ REN 28.08: «вход по браузерной ссылке не сработал» - и всё, что видел
+      // человек, это код с машинным словом. А причины лечатся ПО-РАЗНОМУ: кончились
+      // места по ссылке (просить новую), полна комната (это уже не про ссылку), подпись
+      // не сошлась (новая не поможет вовсе), комнаты не подняты (это у нас).
+      var WHY = {
+        web_link_full: 'По этой ссылке уже вошли все, кому она даёт место. Попроси новую '
+                       + 'ссылку у того, кто позвал.',
+        web_room_full: 'В комнате уже максимум гостей по ссылкам. Новая ссылка не '
+                       + 'поможет - это потолок самой комнаты.',
+        // СТАРЫЙ КОД, КОТОРЫЙ НЫНЕШНИЙ Worker БОЛЬШЕ НЕ ОТДАЁТ. Строку оставляем
+        // НАРОЧНО: страница и Worker выкладываются РАЗНЫМИ командами, и свежая страница
+        // со старым Worker'ом - живой случай, стоивший нам круга уже дважды.
+        web_used: 'Ссылка уже отработала. Попроси новую.',
+        web_expired: 'Ссылка просрочена: у неё есть срок ВХОДА, не разговора. Попроси новую.',
+        bad_web_sign: 'Подпись ссылки не сошлась - новая ссылка тут не поможет, это у нас. '
+                      + 'Скажи об этом тому, кто звал.',
+        bad_web_token: 'Ссылка испорчена - вероятно, скопировалась не целиком.',
+        web_store: 'Не смогли отметить вход и поэтому не пускаем: пускать не отметив '
+                   + 'значит открыть ссылку навсегда. Это у нас.',
+        no_livekit: 'Комнаты сейчас не подняты. Это у нас, ссылка ни при чём.',
+        no_initdata: 'Telegram не передал подпись. Открой комнату кнопкой из бота.',
+      };
+      var code = (j && j.error) || '';
+      // ИМЯ ЗДЕСЬ НЕ ПРОИЗВОЛЬНОЕ, И ЭТО ЗАКОН №26: локальный `var` затеняет модульное имя
+      // ВО ВСЕЙ функции, а не с места присвоения. Первая редакция звалась `human` - и
+      // роняла `nameOf()` строкой ниже («human is not a function»), потому что модульная
+      // функция `human(name, id)` в этой функции переставала существовать. Поймала это
+      // браузерная проба, а не чтение: обе строки по отдельности выглядят верно.
+      var why = WHY[code] || '';
+      if (code === 'web_link_full' && j && j.cap) {
+        why += ' (мест по ссылке: ' + j.cap + ', занято ' + (j.used || j.cap) + ')';
+      }
+      if (code === 'web_room_full' && j && j.cap) {
+        why += ' (гостей по ссылкам в комнате: ' + (j.used || j.cap) + ' из ' + j.cap + ')';
+      }
+      // МАШИННЫЙ КОД ОСТАЁТСЯ РЯДОМ: по нему ищут в логах, и убрать его значит сделать
+      // разбор дороже ради красоты строки.
+      say((why || ('Сервер отказал: ' + (code || 'без причины')))
+          + ' [' + r.status + ' ' + (code || '?') + ']', true);
       return;
+    }
+    // МЕСТО ЗАПОМИНАЕМ СРАЗУ: следующая перезагрузка вернёт его, а не займёт новое.
+    // Ключ по комнате - у человека их бывает несколько, и общий ключ означал бы, что
+    // вторая комната стирает место в первой.
+    if (j && j.seat) {
+      try { localStorage.setItem('rtc_seat_' + ROOM, String(j.seat)); } catch (e) {}
     }
     // ЧТО РАБОТАЕТ - ФАКТ С СЕРВЕРА, А НЕ ПРЕДПОЛОЖЕНИЕ СТРАНИЦЫ. Три состояния, и
     // «не знаем» это НЕ «работает»: бот публикует признак регулярно, и молчание бота
     // означает ровно то, что мы про запись ничего не знаем (fail-closed).
     CAPS = (j && j.caps) || null;
+    // ═══ ЧАСЫ СЕРВЕРА, А НЕ ТЕЛЕФОНА ═══
+    // Просьбы админа приезжают в метаданных с меткой, поставленной БОТОМ, а «свежая или
+    // старая» считала страница по `Date.now()` СВОЕГО устройства. Часы на телефоне живут
+    // своей жизнью: уход на четверть часа вперёд молча превращал свежую просьбу в
+    // «старую, не исполняем» - ни ошибки, ни строки, кнопка админа просто не работает у
+    // одного человека из десяти. Считаем поправку один раз и дальше меряем всё в
+    // серверной шкале.
+    // НЕ ПРИСЛАЛИ - РАБОТАЕМ КАК РАНЬШЕ И ГОВОРИМ ЭТО В КОНСОЛЬ: старый Worker живёт, а
+    // молчаливый возврат к часам телефона был бы возвратом самой поломки.
+    if (j && typeof j.now === 'number' && j.now > 1700000000) {
+      SRV_SKEW = j.now - Date.now() / 1000;
+    } else {
+      console.warn('[rtc] Worker не прислал своё время - свежесть просьб считаю по часам '
+                   + 'этого устройства; расхождение часов ломает их молча');
+    }
 
     room = new LK.Room({
       // ВИДЕО ПОЯВИЛОСЬ (показ экрана и камера), значит адаптивный поток снова нужен:
@@ -990,6 +1657,9 @@
     // зависела от порядка строк, а не от состояния.
     room.on(LK.RoomEvent.ParticipantConnected, function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
+      // ПРИШЁЛ ЧЕЛОВЕК - МЕРЯЕМ ЕГО СВЯЗЬ, НЕ ДОЖИДАЯСЬ ОКНА: именно в этот момент
+      // спрашивают «а его хорошо слышно?», и ответ через десять секунд опаздывает.
+      setTimeout(statTick, 1200);
     });
     room.on(LK.RoomEvent.ParticipantDisconnected, function (p) {
       if (isDj(p)) dropDj();
@@ -999,32 +1669,48 @@
       if (track.kind === 'audio') {
         // РАДИО ВЫКЛЮЧИЛИ - ПОЛЗУНОК УХОДИТ ВМЕСТЕ С НИМ. Регулятор громкости того, чего
         // не играет, читается как «сломано»: человек двигает его и ничего не происходит.
-        if (isDj(p2) || track === djTrack) dropDj(); else detachTrack(track);
+        // ОТПИСКА ОДНОЙ ДОРОЖКИ - НЕ «ВЫКЛЮЧИЛИ РАДИО». При смене станции старая и новая
+        // живут внахлёст, и `dropDj()` здесь снёс бы ТОЛЬКО ЧТО ПРИШЕДШУЮ: радио умирало
+        // бы на каждом переключении (поймано браузерной пробой на моей же правке).
+        // Снимаем ровно эту дорожку; ползунок убираем, только если радио не осталось
+        // ВОВСЕ - выключение целиком приезжает признаком комнаты, а не отпиской.
+        detachTrack(track);
+        if (track === djTrack) djTrack = null;
+        if (isDj(p2) && !Object.keys(djSids).length) { djTrack = null; showDjVol(false); }
         return;
       }
       if (track.kind !== 'video') return;
       // ЧУЖОЕ ВИДЕО УБИРАЕТСЯ, КОГДА ЕГО ПЕРЕСТАЛИ ДАВАТЬ. Оставленный чёрный
       // прямоугольник читается как «зависло».
-      var nodes = $('screens').querySelectorAll('video');
-      for (var i = 0; i < nodes.length; i++) {
-        if (nodes[i].dataset.sid === (track.sid || '')) nodes[i].remove();
-      }
+      dropVideo(track);
+    });
+    // ═══ СВОЁ ВИДЕО ЧЕЛОВЕК ОБЯЗАН ВИДЕТЬ ТОЖЕ ═══
+    // ЖИВОЙ ОТЗЫВ REN: показывающий не видит, ЧТО именно уходит соседям, - ту вкладку или
+    // весь экран, попал ли в кадр. Спросить об этом можно только у них, то есть посреди
+    // разговора. Своя картинка идёт ТОЙ ЖЕ дверью, что чужая (закон №40), и помечена
+    // словом «Ты»: две копии «как показать видео» разошлись бы на первой правке.
+    room.on(LK.RoomEvent.LocalTrackPublished, function (pub) {
+      var t = pub && pub.track;
+      // ИМЯ СВОЕГО ОКНА СОСТАВЛЯЕТ ДВЕРЬ, А НЕ ВЫЗЫВАЮЩИЙ. Передавали 'Ты' строкой - и
+      // пометка держалась на ТЕКСТЕ от вызывающего, а не на признаке «моё»: подсадка
+      // «своё окно без подписи» проходила МОЛЧА, потому что строка приезжала снаружи.
+      if (t && t.kind === 'video') addVideo(t, '', true);
+    });
+    room.on(LK.RoomEvent.LocalTrackUnpublished, function (pub) {
+      if (pub && pub.track) dropVideo(pub.track);
     });
     room.on(LK.RoomEvent.TrackSubscribed, function (track, _pub, p) {
       if (track.kind === 'video') {
         // СМОТРЕТЬ ЧУЖОЙ ЭКРАН УМЕЮТ ВСЕ, ВКЛЮЧАЯ МОБИЛЬНЫЕ: это обычное входящее видео.
         // Ограничение касается только ОТДАЧИ - там у мобильных браузеров нет самого API.
-        var v = track.attach();
-        v.setAttribute('playsinline', ''); v.muted = true; v.autoplay = true;
-        v.dataset.sid = track.sid || '';
-        $('screens').appendChild(v);
+        addVideo(track, (p ? nameOf(p) : 'Участник'), false, p && p.identity);
         say((p && p.name ? p.name : 'Участник') + ' показывает экран.');
         return;
       }
       if (track.kind === 'audio') {
         // ЗВУК ИГРАЕТ ЭЛЕМЕНТОМ, КОТОРЫЙ МЫ ДЕРЖИМ САМИ: на iOS элемент, не привязанный к
         // DOM, браузер вправе выгрузить, и участник замолкает без единой ошибки.
-        attachTrack(track);
+        attachTrack(track, isDj(p));
         // ═══ РАДИО ИГРАЕТ ФОНОМ, А НЕ ВРОВЕНЬ С ГОЛОСАМИ ═══
         // Живой прогон Ren: «мы делали радио, чтобы играло ФОНОМ под разговор - тихо».
         // Громкость КЛИЕНТСКАЯ и у каждого своя: серверной ручки «сделай этому участнику
@@ -1039,6 +1725,8 @@
       spk.forEach(function (p) { now[p.identity] = true; });
       Object.keys(people).forEach(function (id) { people[id].speaking = !!now[id]; });
       draw();
+      // «КРУПНО» СЛЕДУЕТ ЗА ГОВОРЯЩИМ, ИНАЧЕ ЭТО ПРОСТО «БОЛЬШИМ ПЕРВЫЙ ВОШЕДШИЙ».
+      layPaint();
     });
     // ═══ ИНДИКАТОР ЗАПИСИ - ИЗ МЕТАДАННЫХ КОМНАТЫ, А НЕ ИЗ РАССЫЛКИ ПО КАНАЛУ ДАННЫХ ═══
     // Рассылку не услышит тот, кто зашёл ПОЗЖЕ, то есть индикатор молчал бы ровно тому,
@@ -1151,19 +1839,41 @@
     // ПОКА наш шумодав выключен; после включения он предлагает лечить то, что уже вылечено
     // (замечание Ren). Подробности про флаги - тоже только при поломке.
     var AUDIO_HINT = '';
+    //: ПЕРЕГРУЗ ЖИВЁТ ОТДЕЛЬНОЙ СТРОКОЙ И НЕ ГАСНЕТ ВМЕСТЕ С ШУМОДАВОМ. Остальные
+    //: подробности при живом RNNoise прячутся (они про встроенное подавление, которое мы
+    //: сами и выключили), а хрип - про ЗАХВАТ: он остаётся при любом шумодаве, и молчать
+    //: о нём именно тогда, когда человек включил обработку, значит соврать умолчанием.
+    var AUDIO_CLIP = '';
 
     function paintAudio() {
       var box = $('audiodbg');
       if (!box) return;
       if (AUDIO_GOT) AUDIO_TXT = flagLine(AUDIO_GOT);
-      box.textContent = AUDIO_TXT + (RNN_ON ? '' : (AUDIO_HINT ? '\n' + AUDIO_HINT : ''));
+      var rest = [];
+      if (!RNN_ON && AUDIO_HINT) rest.push(AUDIO_HINT);
+      if (AUDIO_CLIP) rest.push(AUDIO_CLIP);
+      box.textContent = AUDIO_TXT + (rest.length ? '\n' + rest.join(' · ') : '');
     }
+
+    //: СКОЛЬКО РАЗ ЖДЁМ МИКРОФОН. Публикация идёт своим темпом (разрешение, устройство,
+    //: сеть), и на 800 мс её может ещё не быть. Раньше это стоило одной строки в
+    //: диагностике, теперь - ВСЕЙ машинки: авто-включение и наблюдатель фона живут за
+    //: этим же входом, и молчаливый ранний возврат означал бы, что шумодав не заводится
+    //: НИКОГДА, а в интерфейсе про это ни слова.
+    var AUDIO_TRIES = 12;
 
     async function audioFacts() {
       var box = $('audiodbg');
       try {
         var ms = micTrack();
-        if (!ms) { box.textContent = 'микрофон ещё не опубликован'; return; }
+        if (!ms) {
+          box.textContent = 'микрофон ещё не опубликован';
+          if (AUDIO_TRIES-- > 0) { setTimeout(audioFacts, 700); return; }
+          // ЖДАЛИ ДЕСЯТЬ СЕКУНД И НЕ ДОЖДАЛИСЬ - ЭТО УЖЕ НЕ «ПОДОЖДИ», А ФАКТ.
+          box.textContent = 'микрофон так и не опубликовался - шумодава и замера фона не '
+            + 'будет. Проверь разрешение на микрофон.';
+          return;
+        }
 
         // ═══ ЧТО МЫ ПОПРОСИЛИ У БРАУЗЕРА НА САМОМ ДЕЛЕ ═══
         // getConstraints() отдаёт то, с чем дорожка реально захвачена, AUDIO_WANT - то,
@@ -1173,12 +1883,16 @@
         var asked = {};
         try { asked = (ms.getConstraints && ms.getConstraints()) || {}; } catch (e) {}
         var lost = [], cant = [];
+        // СВЕРЯЕМСЯ С ТЕМ, ЧЕГО ХОТИМ СЕЙЧАС, А НЕ С ЗАХВАТНЫМ УМОЛЧАНИЕМ. При живом
+        // RNNoise мы САМИ просим `noiseSuppression=false` (один подавитель за раз), и
+        // сверка с `AUDIO_WANT` кричала бы «НАШ БАГ» на собственном верном решении.
+        var _want = audioWant();
         AUDIO_MUST.forEach(function (k) {
           var sup = canDo(k);
           if (sup === false) { cant.push(k); return; }
           if (!(k in asked)) { if (sup) lost.push(k + ': не дошло'); return; }
           var v = (asked[k] && typeof asked[k] === 'object') ? asked[k].ideal : asked[k];
-          if (v !== AUDIO_WANT[k]) lost.push(k + ': просили ' + AUDIO_WANT[k] + ', ушло ' + v);
+          if (v !== _want[k]) lost.push(k + ': просили ' + _want[k] + ', ушло ' + v);
         });
 
         var got = (ms.getSettings && ms.getSettings()) || {};
@@ -1187,18 +1901,21 @@
         // справляться. Значит вопрос был не «слабое ли оно», а «включилось ли вообще»;
         // если браузер сказал ВЫКЛ, у нас есть ровно один законный ход - попросить ещё
         // раз через applyConstraints и СКАЗАТЬ, помогло ли.
-        var bad = AUDIO_MUST.filter(function (k) { return (k in got) && !got[k]; });
+        // ═══ АРУ ЧИНИМ ТЕМ ЖЕ БЕЗОПАСНЫМ ПУТЁМ, ЧТО И ОСТАЛЬНОЕ ═══
+        // ЖИВОЙ ЗАМЕР REN: пик амплитуды 1.456 при норме 1.0 - микрофон изредка
+        // перегружается, и это болезнь АРУ, а не шумодава. Просить её надо там же, где
+        // остальные флаги, и ОДНОЙ дверью: `applyConstraints` на живой дорожке, без
+        // единого переиздания публикации (класс Б1).
+        var bad = AUDIO_MUST.filter(function (k) {
+          return (k in got) && got[k] !== _want[k];
+        });
         var fixed = '';
-        if (bad.length && ms.applyConstraints) {
-          try {
-            await ms.applyConstraints(AUDIO_WANT);
-            got = (ms.getSettings && ms.getSettings()) || got;
-            var still = bad.filter(function (k) { return (k in got) && !got[k]; });
-            fixed = still.length ? (' · чинил, НЕ ПОМОГЛО: ' + still.join(', '))
-                                 : ' · было выключено, включил на ходу';
-          } catch (e) {
-            fixed = ' · починить не дал: ' + (e && e.name || e);
-          }
+        if (bad.length) {
+          var r = await applyAudio(_want);
+          got = r.got || got;
+          fixed = r.kind === 'ok' ? ' · было не то, включил на ходу'
+                : r.kind === 'threw' ? (' · починить не дал: ' + r.why)
+                : (' · чинил, НЕ ПОМОГЛО: ' + (r.why || 'браузер промолчал'));
         }
 
         // ЧАСТОТА И КАНАЛЫ - УЛИКА, А НЕ УКРАШЕНИЕ: конвейер обработки Chrome работает на
@@ -1216,47 +1933,98 @@
             + '⚠️ НАШ БАГ, не дошло до браузера (' + lost.join('; ') + ')';
         }
 
-        // ═══ СВОЙ ШУМОДАВ ПРЕДЛАГАЕМ ТОЛЬКО ТАМ, ГДЕ ВСТРОЕННОГО НЕТ ═══
-        // Умеет браузер - берём встроенное: оно работает в одном контуре с эхо и АРУ,
-        // стоит дешевле и не греет телефон. Кнопка «подавить шум» рядом с уже работающим
-        // подавлением была бы предложением обработать сигнал дважды.
+        // ═══ КНОПКА ШУМОДАВА - У ВСЕХ, И ЦЕНА НАЗВАНА ═══
+        // ПРЕЖДЕ ОНА СТОЯЛА ТОЛЬКО ТАМ, ГДЕ ВСТРОЕННОГО НЕТ, и рассуждение было верным
+        // ровно наполовину: браузер и правда делает ту же работу дешевле. Но ЖИВОЙ ЗАМЕР
+        // (Ren 27.08) показал случай, где встроенное РАБОТАЕТ и не помогает: шум
+        // НЕСТАЦИОНАРНЫЙ (разброс уровня фона 11.5 дБ), 74% энергии в 100-1000 Гц - ровно
+        // там, где речь. Человеку с таким фоном второе средство было недоступно вовсе.
+        // ЦЕНА СКАЗАНА ПРЯМО, А НЕ СПРЯТАНА: двойная обработка греет телефон и может
+        // съесть тихую речь - решает человек, а не мы за него.
         var noNS = canDo('noiseSuppression') === false;
         var rnnBtn = $('rnn');
-        if (noNS && rnnBtn) {
+        if (rnnBtn) {
           rnnBtn.style.display = '';
-          rnnBtn.onclick = function () { rnnToggle(rnnBtn); };
-          // ЧЕСТНЫЙ СОВЕТ, А НЕ ТОЛЬКО КНОПКА (требование Ren): у нашего шумодава своя
-          // цена, а браузер ту же работу делает лучше и даром. Человек вправе выбрать.
-          // СОВЕТ ЖИВЁТ ВО ВТОРОЙ СТРОКЕ И ГАСНЕТ, КОГДА RNNoise ВКЛЮЧЁН: предлагать уйти
-          // в браузер человеку, который уже включил наш шумодав, - это предлагать лечить
-          // вылеченное (замечание Ren).
+          rnnBtn.onclick = function () { rnnToggle(); };
+          // СОВЕТ ЖИВЁТ ВО ВТОРОЙ СТРОКЕ И ГАСНЕТ, КОГДА RNNoise ВКЛЮЧЁН: предлагать
+          // человеку, который уже включил наш шумодав, лечить то же самое - это
+          // предлагать лечить вылеченное (замечание Ren).
+          if (noNS && !RNN_ON) {
+            AUDIO_HINT += (AUDIO_HINT ? ' · ' : '')
+              + 'встроенного подавления тут нет: включи «Подавить шум» либо открой '
+              + 'комнату в обычном браузере - там оно есть';
+          }
+        }
+
+        // ═══ ГРОМКОСТЬ НЕ ВЫРАВНИВАЕТСЯ - ЭТО СЛЫШНО, И ПОЧИНИТЬ ЭТО МОЖЕМ НЕ МЫ ═══
+        // ЖИВОЙ ЗАМЕР REN: пик амплитуды 1.456 при норме 1.0, то есть микрофон изредка
+        // перегружается (1% кадров), и АРУ не работает. Перегрузка случается ДО нас, в
+        // цепочке захвата: ни шумодав, ни applyConstraints её не лечат - лечит убавленное
+        // усиление в системе. Молчать об этом нельзя: человек слышит хрип и думает на
+        // связь, а чинить надо ползунок у себя.
+        if (got.autoGainControl === false || canDo('autoGainControl') === false) {
           AUDIO_HINT += (AUDIO_HINT ? ' · ' : '')
-            + 'встроенного подавления тут нет: включи «Подавить шум» либо открой комнату '
-            + 'в обычном браузере - там оно есть и работает лучше';
+            + 'громкость не выравнивается (АРУ выключена): если микрофон перегружается и '
+            + 'хрипит, убавь усиление в настройках системы - отсюда это не чинится';
         }
         paintAudio();
+        // ЗАМЕР ПЕРЕГРУЗА ИДЁТ ВСЕГДА, А НЕ ТОЛЬКО ПРИ ВЫКЛЮЧЕННОМ ШУМОДАВЕ: хрип живёт в
+        // цепочке ЗАХВАТА и от нашей обработки не зависит.
+        if (!clipTimer) clipTimer = setInterval(clipTick, NS.CLIP_MS);
+        rnnBoot();
       } catch (e) { box.textContent = 'настройки звука не спросить: ' + e; }
+    }
+
+    // ═══ ДЕФОЛТЫ РАЗНЫЕ, И РАЗНИЦА НЕ В ВЕЖЛИВОСТИ, А В ЦЕНЕ ОШИБКИ ═══
+    // ДЕСКТОП - ВКЛЮЧАЕМ САМИ. Прежнее правило («браузер умеет - берём встроенное») было
+    // верным ровно наполовину и ОТМЕНЕНО ЗАМЕРОМ, а не вкусом: живой сэмпл (Ren 27.08)
+    // дал разброс уровня фона 11.5 дБ и 74% его энергии в полосе речи - шум
+    // НЕСТАЦИОНАРНЫЙ, и встроенное подавление, рассчитанное на ровный, его не берёт.
+    // Человек при этом фонит и НЕ ЗНАЕТ ОБ ЭТОМ: слышат его соседи. Кнопка, до которой
+    // надо догадаться дойти, такую задачу не решает.
+    // МОБИЛА - НЕ ВКЛЮЧАЕМ. Там цена в процессоре заметна, а сторож может и опоздать:
+    // рвущийся звук хуже шумного. Вместо этого меряем фон и предлагаем в один тап.
+    // РЕШЕНИЕ ЧЕЛОВЕКА СИЛЬНЕЕ АВТОМАТИКИ И ПЕРЕЖИВАЕТ ВХОД: выключил руками - не
+    // включаем и не предлагаем. Просьба админа сильнее: он человек, а не правило.
+    var rnnBooted = false;
+    function rnnBoot() {
+      if (rnnBooted) return;
+      rnnBooted = true;
+      // ПРОСЬБА АДМИНА ЖДЁТ С САМОГО ВХОДА: `showRec` выполняется ДО того, как микрофон
+      // опубликован, и просьба лежит в `rnnWant`. Исполняем ЕЁ, а не наш дефолт - иначе
+      // автоматика перебила бы живого человека, который только что нажал кнопку.
+      if (rnnWant) { rnnPump(); return; }
+      var pref = rnnPrefGet();
+      if (pref === 'off') { watchStart(); return; }
+      if (HAS_DISPLAY || pref === 'on') { rnnApply(true, 'по умолчанию'); return; }
+      watchStart();
     }
 
     setTimeout(audioFacts, 800);
 
-    // ═══════════ СВОЙ ШУМОДАВ (RNNoise), И ТОЛЬКО ТАМ, ГДЕ ВСТРОЕННОГО НЕТ ═══════════
+    // ═══════════════════ СВОЙ ШУМОДАВ (RNNoise) ═══════════════════
     // РАЗНИЦА МЕЖДУ КЛИЕНТАМИ ПОДТВЕРЖДЕНА ФАКТОМ (Ren 25.08, один код, два клиента):
     //   Mac Telegram (WebView): шумодав НЕ УМЕЕТ · 96000 Гц - обработки нет вовсе;
     //   обычный браузер:        шумодав вкл · эхо вкл · громкость вкл · 48000 Гц.
-    // Значит наши флаги верные, а десктопный Telegram их не принимает. Отсюда правило:
-    // БРАУЗЕР УМЕЕТ - БЕРЁМ ВСТРОЕННОЕ (оно дешевле и лучше: работает вместе с эхо- и
-    // АРУ-контурами), НЕ УМЕЕТ - включаем свой. Ставить RNNoise поверх рабочего
-    // встроенного значило бы дважды обрабатывать один сигнал и греть телефон впустую.
     //
-    // ПО КНОПКЕ, А НЕ ВСЕГДА (условие Ren): на слабых телефонах цена заметна, и решать
-    // это за человека мы не будем. Отсюда же ГРАНИЦА ПОСЛЕДСТВИЙ: путь по умолчанию не
-    // трогается вовсе, и поломка здесь может задеть только того, кто нажал.
+    // ПРЕЖНЕЕ ПРАВИЛО «БРАУЗЕР УМЕЕТ - БЕРЁМ ВСТРОЕННОЕ» ОТМЕНЕНО ЗАМЕРОМ, И ЭТО
+    // ЗАПИСАНО ЗДЕСЬ, ЧТОБЫ ЧЕРЕЗ ПОЛГОДА ЕГО НЕ «ВЕРНУЛИ КАК БЫЛО». Оно опиралось на
+    // посылку «встроенное дешевле и лучше», и первая половина верна до сих пор, а вторая
+    // - нет: разбор живого сэмпла (Maxim_noise.ogg, Ren 27.08) дал разброс уровня фона
+    // 11.5 дБ и 74% энергии в 100-1000 Гц. Такой шум НЕСТАЦИОНАРНЫЙ и лежит в полосе
+    // речи; встроенные подавители рассчитаны на ровный фон и его не берут. Двойная
+    // обработка при этом не нужна и вредна, поэтому при живом RNNoise встроенное
+    // ВЫКЛЮЧАЕТСЯ (`audioWant`), а не работает поверх.
+    //
+    // ГРАНИЦА ПОСЛЕДСТВИЙ НАЗВАНА ЧЕСТНО: теперь дефолт десктопа ТРОГАЕТСЯ, и поломка
+    // здесь задевает не только того, кто нажал. Поэтому каждый шаг fail-open, отказ виден
+    // строкой, а сторож процессора умеет снять шумодав сам.
     //
     // FAIL-OPEN НА КАЖДОМ ШАГЕ: не тот sampleRate, нет wasm, не собрался worklet, отказал
     // setProcessor - остаёмся на ИСХОДНОЙ дорожке и говорим причину. Тишина в эфире хуже
     // шума: шум мешает, а тишину человек читает как «меня не слышно вовсе».
-    var RNN_ON = false;
+    // (`RNN_ON` объявлен снаружи комнаты: его читает `showRec`, который выполняется до
+    // подключения. Объявление здесь было бы `ReferenceError` на каждом таком входе.)
 
     // WASM ЗАГРУЖАЕТСЯ ГЛАВНЫМ ПОТОКОМ И ЕДЕТ В WORKLET БАЙТАМИ: в AudioWorklet нет ни
     // fetch, ни importScripts - оттуда его не достать никак.
@@ -1308,6 +2076,13 @@ class RnnProc extends AudioWorkletProcessor {
     if (!inp || !inp[0] || !out || !out[0]) return true;
     const src = inp[0], dst = out[0];
     if (this.bypass || !this.ready) { dst.set(src); return true; }
+    // ═══ СКОЛЬКО МЫ СЪЕДАЕМ У ЗВУКОВОГО ПОТОКА - МЕРИМ ЗДЕСЬ, БОЛЬШЕ НЕГДЕ ═══
+    // Обработка живёт в потоке рендера звука, и «тормозит ли устройство» это вопрос про
+    // ЕГО бюджет, а не про главный поток. Часов в AudioWorkletGlobalScope почти нет:
+    // ни performance, ни Date гарантированно не обещаны спецификацией, но Date.now() -
+    // часть самого языка и есть в любом глобальном контексте. Разрешение 1 мс грубое, и
+    // поэтому мы НЕ судим по одному кадру: копим занятость за секунду и делим на неё же.
+    const _t0 = Date.now();
     // КВАНТ WEBAUDIO - 128 СЭМПЛОВ, КАДР RNNOISE - 480: без буфера они не сходятся ни
     // при каком раскладе, и «почти работает» тут означает треск.
     const merged = new Float32Array(this.inBuf.length + src.length);
@@ -1328,6 +2103,16 @@ class RnnProc extends AudioWorkletProcessor {
       this.outBuf = grown;
       this.inBuf = this.inBuf.subarray(this.N);
     }
+    // ЗАНЯТОСТЬ СЧИТАЕМ ДО ВЫДАЧИ, А НЕ ПОСЛЕ: дальше идёт только копирование готового.
+    this.busy = (this.busy || 0) + (Date.now() - _t0);
+    if (this.mark === undefined) this.mark = _t0;
+    const _win = Date.now() - this.mark;
+    if (_win >= 1000) {
+      // ДОЛЯ, А НЕ МИЛЛИСЕКУНДЫ: «17 мс» ничего не значит без окна, а «0.62» отвечает на
+      // единственный вопрос - сколько бюджета звукового потока мы съели.
+      this.port.postMessage({ load: this.busy / _win, win: _win });
+      this.busy = 0; this.mark = Date.now();
+    }
     if (this.outBuf.length >= dst.length) {
       dst.set(this.outBuf.subarray(0, dst.length));
       this.outBuf = this.outBuf.subarray(dst.length);
@@ -1347,6 +2132,17 @@ registerProcessor('rnn-denoise', RnnProc);
       var node = null, ctx = null, srcNode = null, dstNode = null, ownCtx = null;
       return {
         name: 'rnnoise',
+        //: ИСТОЧНИК ЗАПОМИНАЕМ САМИ, А НЕ СПРАШИВАЕМ У SDK. `track.mediaStreamTrack` в
+        //: разных версиях livekit-client отдаёт то исходную дорожку, то обработанную, и
+        //: проверить это из контейнера нечем (закон №48). А `applyConstraints` имеет
+        //: смысл ТОЛЬКО на дорожке ЗАХВАТА: у дорожки из MediaStreamAudioDestinationNode
+        //: ни эха, ни АРУ нет вовсе, и просьба ушла бы в никуда - молча. Здесь источник
+        //: приходит аргументом, сомнений не остаётся.
+        srcTrack: null,
+        anIn: null, anOut: null,
+        //: Кто слушает доклад о занятости. Ставит его `rnnApply`, а не сам процессор:
+        //: процессор не знает ни про кнопки, ни про платформу.
+        onLoad: null,
         async init(opts) {
           // ═══ 48 кГц ДЕЛАЕМ САМИ, А НЕ ТРЕБУЕМ ОТ ЧУЖОГО КОНТЕКСТА ═══
           // ЖИВОЙ ОТКАЗ REN 26.08: «нужен 48 кГц, а контекст на 96000 - звук идёт как
@@ -1387,26 +2183,70 @@ registerProcessor('rnn-denoise', RnnProc);
             throw new Error('нужен 48 кГц, а тут ' + _have
                             + ' - браузер не дал пересчитать');
           }
-          // СВОЙ КОНТЕКСТ НАДО РАЗБУДИТЬ: созданный до жеста человека он стоит suspended, и
-          // дорожка молчала бы при полностью исправной цепочке.
-          if (ctx.state === 'suspended') { try { await ctx.resume(); } catch (e) {} }
+          // ═══ КОНТЕКСТ НАДО РАЗБУДИТЬ, И ЖДАТЬ ЕГО ВЕЧНО НЕЛЬЗЯ ═══
+          // Созданный до жеста человека он стоит `suspended`, а suspended-контекст НЕ
+          // ОБРАБАТЫВАЕТ ЗВУК ВООБЩЕ - то есть в комнату уехала бы тишина при полностью
+          // исправной цепочке. Это хуже любого шума: шум мешает, тишину человек читает
+          // как «меня не слышно».
+          // ЖИВОЙ ОТКАЗ, ПОЙМАННЫЙ БРАУЗЕРНОЙ ПРОБОЙ: с автоматическим включением при
+          // входе жеста НЕТ ВОВСЕ, и `resume()` не разрешается НИКОГДА - обещание висит,
+          // кнопка остаётся заблокированной, и выглядит это как намертво сломанный
+          // шумодав. Пока включение было только по тапу, беды не было видно: тап и есть
+          // жест. Поэтому ждём ОГРАНИЧЕННО и проверяем ФАКТ (`state`), а не то, что вызов
+          // вернулся: `resume()` вправе разрешиться, оставив контекст спящим.
+          if (ctx.state === 'suspended') {
+            try {
+              await Promise.race([ctx.resume(),
+                                  new Promise(function (r) { setTimeout(r, 1200); })]);
+            } catch (e) {}
+          }
+          if (ctx.state !== 'running') {
+            throw new Error('браузер не запускает обработку звука без твоего действия - '
+                            + 'нажми «Подавить шум» руками');
+          }
           var url = URL.createObjectURL(new Blob([RNN_WORKLET], { type: 'text/javascript' }));
           try { await ctx.audioWorklet.addModule(url); } finally { URL.revokeObjectURL(url); }
           node = new AudioWorkletNode(ctx, 'rnn-denoise', {
             numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1],
             processorOptions: { wasm: bytes },
           });
+          var _self = this;
           node.port.onmessage = function (ev) {
             if (ev.data && ev.data.error) say('Шумодав не собрался: ' + ev.data.error
                                               + ' - звук идёт как был.', true);
+            if (ev.data && typeof ev.data.load === 'number' && _self.onLoad) {
+              _self.onLoad(ev.data.load);
+            }
           };
+          this.srcTrack = opts.track;
           srcNode = ctx.createMediaStreamSource(new MediaStream([opts.track]));
           dstNode = ctx.createMediaStreamDestination();
           srcNode.connect(node); node.connect(dstNode);
+          // ═══ ДВА АНАЛИЗАТОРА - ЭТО «ДО» И «ПОСЛЕ» В ОДНУ И ТУ ЖЕ СЕКУНДУ ═══
+          // Замер «до включения, потом после» пришлось бы разносить во времени, а фон за
+          // эти секунды меняется сам (он у нас нестационарный - с этого и начался разбор).
+          // Здесь оба берутся из ОДНОГО сигнала одновременно, и разница означает ровно
+          // работу шумодава, а не смену обстановки.
+          // ЗАМЕР - ДИАГНОСТИКА, А НЕ ПРОДУКТ: не собрались анализаторы - теряем ОТЧЁТ,
+          // а не подавление. Уронить здесь весь шумодав ради строки «-14 дБ» значило бы
+          // выключить работающую фичу из-за неработающего прибора.
+          try {
+            this.anIn = ctx.createAnalyser();
+            this.anIn.fftSize = 1024; this.anIn.smoothingTimeConstant = 0;
+            this.anOut = ctx.createAnalyser();
+            this.anOut.fftSize = 1024; this.anOut.smoothingTimeConstant = 0;
+            srcNode.connect(this.anIn); node.connect(this.anOut);
+          } catch (e) {
+            this.anIn = this.anOut = null;
+            console.warn('[rnn] замер эффекта недоступен:', e);
+          }
           this.processedTrack = dstNode.stream.getAudioTracks()[0];
         },
         async restart(opts) { await this.destroy(); await this.init(opts); },
         async destroy() {
+          this.onLoad = null;
+          this.srcTrack = null;
+          this.anIn = this.anOut = null;
           try { srcNode && srcNode.disconnect(); } catch (e) {}
           try { node && node.disconnect(); } catch (e) {}
           // СВОЙ КОНТЕКСТ ЗАКРЫВАЕМ, ЧУЖОЙ - НИКОГДА: контекст LiveKit держит весь звук
@@ -1417,39 +2257,493 @@ registerProcessor('rnn-denoise', RnnProc);
       };
     }
 
-    async function rnnToggle(btn) {
-      var pub = null;
+    //: ЖИВОЙ ПРОЦЕССОР. Нужен ради ДВУХ вещей, которых больше взять негде: исходной
+    //: дорожки захвата (на ней и только на ней имеет смысл applyConstraints) и двух
+    //: анализаторов, дающих «фон до» и «фон после» в одну и ту же секунду.
+    var RNN_PROC = null;
+    var rnnBusy = false;
+
+    function micPub() {
+      var out = null;
       room.localParticipant.trackPublications.forEach(function (p) {
-        if (String(p.source || '') === 'microphone' && p.track) pub = p;
+        if (String(p.source || '') === 'microphone' && p.track) out = p;
       });
-      if (!pub || !pub.track.setProcessor) {
-        say('Этот клиент не умеет подключать шумодав к дорожке.', true); return;
-      }
-      btn.disabled = true;
+      return out;
+    }
+
+    // ═══ ЧТО МЫ ХОТИМ ОТ БРАУЗЕРА ПРЯМО СЕЙЧАС ═══
+    // ОДИН ПОДАВИТЕЛЬ ЗА РАЗ. Встроенный и наш решают одну задачу, и включённые вместе
+    // они не складываются, а мешают: первый съедает то, на чём обучен второй, и голос
+    // глохнет раньше шума. Поэтому при живом RNNoise просим `noiseSuppression=false`, а
+    // при выключенном возвращаем `true` - обе стороны, а не одна (закон №55).
+    // ЭХО - ВСЕГДА И БЕЗУСЛОВНО: без него комната с двух телефонов рядом даёт вой, и это
+    // не зависит ни от какого шумодава.
+    function audioWant() {
+      var w = {};
+      Object.keys(AUDIO_WANT).forEach(function (k) { w[k] = AUDIO_WANT[k]; });
+      w.echoCancellation = true;
+      w.noiseSuppression = !RNN_ON;
+      return w;
+    }
+
+    // ═══ ОДНА ДВЕРЬ НА ЛЮБУЮ ПРАВКУ НАСТРОЕК ЖИВОЙ ДОРОЖКИ ═══
+    // ПУБЛИКАЦИЯ НЕ ПЕРЕСОЗДАЁТСЯ НИ ПРИ КАКОМ ИЗМЕНЕНИИ ФЛАГОВ. Путь
+    // unpublish -> publish это ровно класс Б1: `Promise.race` отменяет ОЖИДАНИЕ, а
+    // операция внутри SDK продолжается, источник числится «публикуется», и следующий тап
+    // падает «waiting for pending publication promise timed out». Мы это чинили, и второй
+    // дороги, по которой оно вернётся, здесь нет.
+    // ПРОСЬБА - НЕ ФАКТ (закон №35): после applyConstraints ПЕРЕЧИТЫВАЕМ настройки. У
+    // браузера три поведения, и они разные для человека: применил / отказал ошибкой /
+    // СОГЛАСИЛСЯ И НИЧЕГО НЕ СДЕЛАЛ. Последнее самое коварное - вызов проходит, а звук
+    // прежний, и без перечитывания мы отрапортовали бы успех.
+    async function applyAudio(want) {
+      // ИСТОЧНИК, А НЕ ОБРАБОТАННАЯ ДОРОЖКА: у дорожки из MediaStreamAudioDestinationNode
+      // нет ни эха, ни АРУ, и просьба ушла бы в никуда - молча.
+      var t = (RNN_PROC && RNN_PROC.srcTrack) || micTrack();
+      if (!t || !t.applyConstraints) return { ok: false, why: 'дорожки захвата нет', got: {} };
+      var ask = {};
+      Object.keys(want).forEach(function (k) {
+        // НЕИЗВЕСТНЫЙ БРАУЗЕРУ ФЛАГ НЕ ПРОСИМ ВОВСЕ: часть браузеров на такой набор
+        // отвечает OverconstrainedError и не применяет НИЧЕГО - то есть один лишний ключ
+        // отменял бы и остальные.
+        if (canDo(k) !== false) ask[k] = want[k];
+      });
+      // ═══ ТРИ ИСХОДА, И СХЛОПНУТЬ ИХ В ДВА НЕЛЬЗЯ ═══
+      // «Отказал ошибкой» и «согласился и ничего не сделал» - разные миры для человека:
+      // в первом браузер что-то не умеет и говорит об этом, во втором вызов проходит, а
+      // звук прежний. Схлопнув их, мы отправили бы разбор не туда - и ровно это поймала
+      // браузерная проба, когда первая редакция этой двери вернула одно слово на оба.
       try {
-        if (RNN_ON) {
-          await pub.track.stopProcessor();
-          RNN_ON = false;
-          say('Шумодав выключен.');
-        } else {
-          say('Включаю шумодав, это пара секунд…');
-          await pub.track.setProcessor(rnnProcessor(await rnnBytes()));
-          RNN_ON = true;
-          say('Шумодав включён. Если станет глухо - выключи той же кнопкой.');
-        }
+        await t.applyConstraints(ask);
       } catch (e) {
-        // ОСТАЁМСЯ НА ИСХОДНОЙ ДОРОЖКЕ: шум мешает, тишина означает «меня нет».
-        RNN_ON = false;
-        say('Шумодав не включился: ' + (e && e.message || e) + ' - звук идёт как был.', true);
+        return { kind: 'threw', ok: false, why: (e && e.name) || String(e),
+                 got: (t.getSettings && t.getSettings()) || {} };
       }
-      btn.classList.toggle('on', RNN_ON);
-      btn.textContent = RNN_ON ? '🔊 Выключить шумодав' : '🔇 Подавить шум';
-      btn.disabled = false;
-      // СТРОКА СЛЕДУЕТ ЗА СОСТОЯНИЕМ, А НЕ ЗА ПОРЯДКОМ СТРОК. Без этого человек включал
-      // шумодав и продолжал читать, что шумодава нет: строка меряет БРАУЗЕР и обновляется
-      // один раз при захвате, а наш RNNoise живёт по кнопке.
+      var got = (t.getSettings && t.getSettings()) || {};
+      var bad = Object.keys(ask).filter(function (k) {
+        return (k in got) && got[k] !== ask[k];
+      });
+      return { kind: bad.length ? 'silent' : 'ok', ok: !bad.length,
+               why: bad.length ? bad.join(', ') : '', got: got };
+    }
+
+    // ═════════════ ЗАМЕР ФОНА: ОДНА МАШИНКА НА ДЕТЕКТОР И НА ОТЧЁТ ═════════════
+    // Обе задачи спрашивают одно и то же - какой у человека фон В ПАУЗАХ речи. Две копии
+    // этого счёта разошлись бы порогом «что считать паузой», и тогда предложение на
+    // мобиле опиралось бы на один фон, а отчёт «-14 дБ» на другой (закон №40).
+    function newStat() { return { all: [], db: [], low: [] }; }
+
+    function frameDb(an, tbuf) {
+      an.getFloatTimeDomainData(tbuf);
+      var s = 0;
+      for (var i = 0; i < tbuf.length; i++) s += tbuf[i] * tbuf[i];
+      var rms = Math.sqrt(s / tbuf.length);
+      return rms > 1e-8 ? 20 * Math.log10(rms) : -120;
+    }
+
+    // ДОЛЯ ЭНЕРГИИ В 100-1000 Гц - ЭТО НЕ УКРАШЕНИЕ ОТЧЁТА, А ПРИЗНАК «МЕШАЕТ РЕЧИ».
+    // Шум, лежащий выше 4 кГц, человек слышит как шипение и разбирать речь оно почти не
+    // мешает; шум В ПОЛОСЕ РЕЧИ (живой сэмпл: 74%) съедает именно разборчивость.
+    function lowShare(an, fbuf) {
+      an.getFloatFrequencyData(fbuf);
+      var hz = (an.context.sampleRate / 2) / fbuf.length;
+      var lo = 0, all = 0;
+      for (var i = 1; i < fbuf.length; i++) {
+        var f = i * hz;
+        if (f > 8000) break;
+        if (fbuf[i] <= -180) continue;              // пустой бин
+        var pw = Math.pow(10, fbuf[i] / 10);
+        all += pw;
+        if (f >= NS.LOW_HZ[0] && f <= NS.LOW_HZ[1]) lo += pw;
+      }
+      return all > 0 ? lo / all : 0;
+    }
+
+    // ПОРОГ ПАУЗЫ ПЛАВАЮЩИЙ И СЧИТАЕТСЯ ОТ СОБСТВЕННОГО МАКСИМУМА ЗА ОКНО. Абсолютное
+    // число означало бы «у половины людей не работает»: усиление микрофона у всех своё, и
+    // -45 dBFS у одного это фон, у другого - крик. Окно короткое (последние ~200 кадров,
+    // то есть 10 секунд), иначе один хлопок дверью навсегда поднял бы планку и вся речь
+    // после него считалась бы паузой.
+    function feed(st, an, tbuf, fbuf) {
+      var d = frameDb(an, tbuf);
+      st.all.push(d);
+      if (st.all.length > 200) st.all.shift();
+      var mx = -120;
+      for (var i = 0; i < st.all.length; i++) if (st.all[i] > mx) mx = st.all[i];
+      if (d > mx - NS.SPEECH_GAP_DB) return;        // это речь, а не пауза
+      st.db.push(d);
+      st.low.push(lowShare(an, fbuf));
+      if (st.db.length > 600) { st.db.shift(); st.low.shift(); }
+    }
+
+    function verdict(st) {
+      if (st.db.length < NS.MIN_PAUSES) return null;
+      var s = st.db.slice().sort(function (a, b) { return a - b; });
+      var q = function (x) { return s[Math.min(s.length - 1, Math.floor(x * (s.length - 1)))]; };
+      var sum = 0;
+      for (var i = 0; i < st.low.length; i++) sum += st.low[i];
+      // РАЗБРОС - ЭТО p90-p10, А НЕ max-min: одиночный щелчок не должен объявлять ровный
+      // гул нестационарным, иначе предложение вылезало бы у всех подряд.
+      return { db: q(0.5), spread: q(0.9) - q(0.1), low: sum / st.low.length,
+               n: st.db.length };
+    }
+
+    // ═══ НАБЛЮДАТЕЛЬ ФОНА. ЖИВЁТ, ПОКА ШУМОДАВ ВЫКЛЮЧЕН, И ТОЛЬКО ТОГДА ═══
+    // Включён - предлагать нечего, а лишний анализатор на телефоне это лишняя работа.
+    // СВОЙ КОНТЕКСТ, И ЕМУ НЕ НУЖНЫ 48 кГц: 48 - условие работы МОДЕЛИ (она обучена на
+    // кадрах 480 сэмплов), а уровень и доля полосы считаются на любой частоте, потому что
+    // границы бинов берутся из `ctx.sampleRate`.
+    var WATCH = null, rnnOffered = false;
+
+    function watchStop() {
+      if (!WATCH) return;
+      try { clearInterval(WATCH.timer); } catch (e) {}
+      try { WATCH.src.disconnect(); } catch (e) {}
+      try { WATCH.ctx.close(); } catch (e) {}
+      WATCH = null;
+    }
+
+    function watchStart() {
+      watchStop();
+      if (RNN_ON) return;
+      var t = micTrack();
+      if (!t) return;
+      try {
+        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        var an = ctx.createAnalyser();
+        an.fftSize = 1024; an.smoothingTimeConstant = 0;
+        var src = ctx.createMediaStreamSource(new MediaStream([t]));
+        src.connect(an);
+        WATCH = { ctx: ctx, an: an, src: src, st: newStat(), hold: 0,
+                  tbuf: new Float32Array(an.fftSize),
+                  fbuf: new Float32Array(an.frequencyBinCount), timer: 0 };
+        WATCH.timer = setInterval(watchTick, NS.TICK_MS);
+      } catch (e) {
+        // НЕ ПОЛУЧИЛОСЬ МЕРИТЬ - ЭТО НЕ ПОЛОМКА РАЗГОВОРА. Молчим в интерфейсе и
+        // говорим в консоль: предложение просто не появится.
+        console.warn('[rnn] наблюдатель фона не завёлся:', e);
+      }
+    }
+
+    function watchTick() {
+      if (!WATCH) return;
+      feed(WATCH.st, WATCH.an, WATCH.tbuf, WATCH.fbuf);
+      var v = verdict(WATCH.st);
+      if (!v) return;
+      // ТРИ ПРИЗНАКА РАЗОМ, А НЕ ОДИН ГРОМКИЙ. Просто громкий фон встроенное подавление
+      // берёт; берёт оно и ровный. Не берёт оно РОВНО ЭТО СОЧЕТАНИЕ - заметный уровень,
+      // прыгающий, и в полосе речи (живой разбор Ren 27.08).
+      var noisy = v.db > NS.FLOOR_DB && v.spread >= NS.SPREAD_DB && v.low >= NS.LOW_SHARE;
+      WATCH.hold = noisy ? (WATCH.hold + NS.TICK_MS / 1000) : 0;
+      if (WATCH.hold < NS.HOLD_SEC) return;
+      rnnOffer(v);
+      // ПРЕДЛОЖИЛИ (ИЛИ РЕШИЛИ НЕ ПРЕДЛАГАТЬ) - БОЛЬШЕ МЕРИТЬ НЕЧЕГО. Наблюдатель,
+      // крутящийся до конца созвона ради вопроса, на который ответ уже дан, - это работа
+      // впустую на телефоне, ради которого мы и не включаем шумодав сами.
+      if (rnnOffered || HAS_DISPLAY || rnnPrefGet()) watchStop();
+    }
+
+    // ═══ ПРЕДЛОЖЕНИЕ - ОДИН РАЗ ЗА СЕССИЮ И ТОЛЬКО ТАМ, ГДЕ ОНО УМЕСТНО ═══
+    // На десктопе шумодав уже включён сам, предлагать нечего. Человеку, выключившему его
+    // руками, не предлагаем ВООБЩЕ: он решил, и повторный вопрос это не забота, а спор.
+    function rnnOffer(v) {
+      if (rnnOffered || RNN_ON || HAS_DISPLAY || rnnPrefGet()) return;
+      rnnOffered = true;
+      var box = $('rnnoffer');
+      if (!box) return;
+      box.style.display = '';
+      box.textContent = '';
+      var t = document.createElement('span');
+      // ЦИФРЫ, А НЕ «У ВАС ШУМНО»: человек вправе не согласиться, и тогда ему нужно
+      // видеть, на чём основано предложение.
+      t.textContent = 'Шумно: фон ' + Math.round(v.db) + ' дБ, скачет на '
+        + Math.round(v.spread) + ' дБ, ' + Math.round(v.low * 100)
+        + '% его энергии там же, где речь - встроенное подавление такой не берёт. ';
+      box.appendChild(t);
+      var b = document.createElement('button');
+      b.textContent = '🔇 Включить шумодав';
+      b.onclick = function () {
+        box.style.display = 'none';
+        rnnPref('on');
+        rnnApply(true, 'по предложению');
+      };
+      box.appendChild(b);
+    }
+
+    // ═══ СКОЛЬКО ОН СНЯЛ - ЗАМЕР, А НЕ ФЛАГ «ВКЛЮЧЕНО» (закон №35) ═══
+    // «Шумодав включён» верно и тогда, когда он не сделал ничего: модель могла не подойти
+    // источнику, и человек продолжал бы фонить, считая себя вылеченным. Отчёт называет
+    // ЧИСЛО, а нулевой результат - называет нулевым.
+    var gainTimer = 0;
+    function gainStop() { if (gainTimer) { clearInterval(gainTimer); gainTimer = 0; } }
+
+    function gainStart() {
+      gainStop();
+      var pr = RNN_PROC;
+      if (!pr || !pr.anIn || !pr.anOut) return;
+      var a = newStat(), b = newStat();
+      var tb = new Float32Array(pr.anIn.fftSize);
+      var fb = new Float32Array(pr.anIn.frequencyBinCount);
+      var left = Math.round(NS.GAIN_SEC * 1000 / NS.TICK_MS);
+      gainTimer = setInterval(function () {
+        if (!RNN_ON || RNN_PROC !== pr) { gainStop(); return; }
+        // ПАУЗЫ ВЫБИРАЕМ ПО ВХОДУ, А ЗАМЕРЯЕМ ОБА. Выбери мы их по выходу - шумодав сам
+        // решал бы, что считать паузой, и отчёт хвалил бы себя.
+        var before = a.db.length;
+        feed(a, pr.anIn, tb, fb);
+        if (a.db.length > before) feed(b, pr.anOut, tb, fb);
+        if (--left > 0) return;
+        gainStop();
+        var va = verdict(a), vb = verdict(b);
+        if (!va || !vb) {
+          // МОЛЧАНИЕ ТУТ ЧЕСТНЕЕ ВЫДУМАННОГО ЧИСЛА: пауз не набралось, мерить нечего.
+          return;
+        }
+        var d = va.db - vb.db;
+        if (d >= NS.GAIN_MIN_DB) {
+          say('Шумодав работает: фон −' + Math.round(d) + ' дБ.');
+        } else {
+          say('Шумодав включён, но фон упал всего на ' + Math.round(d)
+              + ' дБ - на этом источнике он не помогает. Выключить можно той же кнопкой.',
+              true);
+        }
+      }, NS.TICK_MS);
+    }
+
+    // ═══ ПЕРЕГРУЗ МИКРОФОНА: МЕРИМ СИГНАЛ, А НЕ ЧИТАЕМ ФЛАГ ═══
+    // Смотрим НА ИСТОЧНИК в обоих состояниях: при выключенном шумодаве это анализатор
+    // наблюдателя фона, при включённом - входной анализатор процессора. Перегруз
+    // случается ДО нас, в цепочке захвата, и от того, обрабатываем мы звук или нет, он
+    // не зависит - значит и мерить его надо одинаково.
+    var CLIP = { n: 0, hit: 0, said: false }, clipTimer = 0;
+
+    function clipTick() {
+      var an = (RNN_PROC && RNN_PROC.anIn) || (WATCH && WATCH.an) || null;
+      if (!an) return;
+      var buf = new Float32Array(an.fftSize);
+      an.getFloatTimeDomainData(buf);
+      var pk = 0;
+      for (var i = 0; i < buf.length; i++) {
+        var v = buf[i] < 0 ? -buf[i] : buf[i];
+        if (v > pk) pk = v;
+      }
+      CLIP.n++;
+      if (pk >= NS.CLIP_PEAK) CLIP.hit++;
+      // ОКНО СКОЛЬЗЯЩЕЕ: за час разговора один хриплый эпизод не должен висеть в строке
+      // до конца созвона, а свежий - обязан появиться.
+      if (CLIP.n > 600) { CLIP.n = 300; CLIP.hit = Math.round(CLIP.hit / 2); }
+      if (CLIP.n < NS.CLIP_MIN) return;
+      var share = CLIP.hit / CLIP.n;
+      // ДВА ПОРОГА, КАК У СТОРОЖА ПРОЦЕССОРА: строка, мигающая на границе, читается как
+      // случайная и перестаёт что-либо значить.
+      var bad = share >= NS.CLIP_SHARE;
+      var okAgain = share <= NS.CLIP_SHARE / 2;
+      if (bad === CLIP.said || (!bad && !okAgain)) return;
+      CLIP.said = bad;
+      AUDIO_CLIP = bad
+        ? ('микрофон перегружается: ' + (share * 100).toFixed(1) + '% кадров упираются в '
+           + 'потолок. АРУ этого не лечит - убавь усиление микрофона в настройках системы')
+        : '';
       paintAudio();
     }
+
+    // ═══ СТОРОЖ ПРОЦЕССОРА: ДВА ПОРОГА, ЧТОБЫ НЕ ХЛОПАТЬ ═══
+    // Доклад приходит раз в секунду из самого worklet'а, поэтому счёт докладов и есть
+    // счёт секунд. Между `CPU_OK` и `CPU_BAD` счётчик НЕ РАСТЁТ И НЕ СБРАСЫВАЕТСЯ - это и
+    // есть гистерезис: на границе сторож молчит вместо того, чтобы включать и выключать.
+    var cpuBad = 0, cpuWarned = false;
+    function cpuOnLoad(load) {
+      if (load >= NS.CPU_BAD) cpuBad += 1;
+      else if (load <= NS.CPU_OK) { cpuBad = 0; return; }
+      if (cpuBad < NS.CPU_HOLD_SEC) return;
+      cpuBad = 0;
+      var pct = Math.round(load * 100);
+      if (!HAS_DISPLAY) {
+        // НА ТЕЛЕФОНЕ РЕШАЕМ САМИ И ГОВОРИМ ОБ ЭТОМ. Захлебнувшаяся обработка это не
+        // «чуть хуже качество», это рвущийся звук: сначала снимаем, потом объясняем.
+        // И БОЛЬШЕ НЕ ПРЕДЛАГАЕМ: `rnnApply(false)` заводит наблюдателя фона заново, а
+        // фон никуда не делся - без этой строки получился бы круг «сторож снял -
+        // детектор предложил - человек включил - сторож снял».
+        rnnOffered = true;
+        rnnApply(false, 'устройство не справляется');
+        say('Шумодав выключен: устройство не справляется (обработка съедала ' + pct
+            + '% звукового потока). Звук идёт как был.', true);
+        return;
+      }
+      if (cpuWarned) return;
+      cpuWarned = true;
+      // НА ДЕСКТОПЕ РЕШАЕТ ЧЕЛОВЕК: там запас есть почти всегда, и снятое за спиной
+      // подавление он заметит по звуку, а не по нашей строке.
+      var box = $('rnnoffer');
+      if (!box) return;
+      box.style.display = '';
+      box.textContent = '';
+      var t = document.createElement('span');
+      t.textContent = 'Шумодав ест ' + pct + '% звукового потока - устройство на пределе, '
+        + 'звук может рваться. ';
+      box.appendChild(t);
+      var b = document.createElement('button');
+      b.textContent = '🔊 Выключить шумодав';
+      b.onclick = function () {
+        box.style.display = 'none';
+        rnnPref('off');
+        rnnApply(false, 'по предупреждению');
+      };
+      box.appendChild(b);
+    }
+
+    // ═══ ЧТО ЧЕЛОВЕК РЕШИЛ САМ - ПЕРЕЖИВАЕТ ВХОД И ВЫХОД ═══
+    // «Уважать» решение только внутри одной сессии значит переспрашивать при каждом
+    // заходе: автоматика включала бы шумодав заново, и человек выключал бы его снова.
+    function rnnPref(v) { try { localStorage.setItem(RNN_PREF_KEY, v); } catch (e) {} }
+    function rnnPrefGet() {
+      try { return localStorage.getItem(RNN_PREF_KEY) || ''; } catch (e) { return ''; }
+    }
+
+    function rnnPaint() {
+      var btn = $('rnn');
+      if (btn) {
+        btn.classList.toggle('on', RNN_ON);
+        btn.textContent = RNN_ON ? '🔊 Выключить шумодав' : '🔇 Подавить шум';
+      }
+      // СТРОКА СЛЕДУЕТ ЗА СОСТОЯНИЕМ, А НЕ ЗА ПОРЯДКОМ СТРОК: браузерная часть меряется
+      // один раз при захвате, наш шумодав живёт по кнопке.
+      paintAudio();
+    }
+
+    // ═══ СОСТОЯНИЕ РАССЫЛАЕМ САМИ: АДМИН ВИДИТ ФАКТ, А НЕ СВОЮ ЖЕ ПРОСЬБУ ═══
+    // Бот знает только то, что попросил, - а включает шумодав КЛИЕНТ и вправе не смочь
+    // (нет wasm, не тот sampleRate, человек выключил обратно). Показывать админу
+    // отправленную просьбу вместо факта значило бы врать ровно тем способом, ради
+    // которого этот экран и заводится.
+    function rnnSay() {
+      try { upsert(room.localParticipant.identity, { rnn: RNN_ON }); } catch (e) {}
+      send({ t: 'rnn', on: RNN_ON });
+    }
+
+    // ═══════════ ОДНА ДВЕРЬ НА ВСЕ ЧЕТЫРЕ ПУТИ ВКЛЮЧЕНИЯ ═══════════
+    // Тап человека, автоматика десктопа, просьба админа и сторож процессора обязаны
+    // делать ОДНО И ТО ЖЕ: иначе, например, автоматика включила бы шумодав, забыв снять
+    // встроенный, и мы получили бы двойную обработку у половины комнаты (закон №40).
+    async function rnnApply(on, why) {
+      on = !!on;
+      var pub = micPub();
+      if (!pub || !pub.track || !pub.track.setProcessor) {
+        if (why === 'тап') say('Этот клиент не умеет подключать шумодав к дорожке.', true);
+        return false;
+      }
+      if (rnnBusy || on === RNN_ON) { rnnPaint(); return on === RNN_ON; }
+      rnnBusy = true;
+      var btn = $('rnn');
+      if (btn) btn.disabled = true;
+      try {
+        if (on) {
+          watchStop();
+          if (why === 'тап') say('Включаю шумодав, это пара секунд…');
+          var proc = rnnProcessor(await rnnBytes());
+          proc.onLoad = cpuOnLoad;
+          // setProcessor ПОДМЕНЯЕТ ДОРОЖКУ У ОТПРАВИТЕЛЯ, А НЕ ПЕРЕИЗДАЁТ ПУБЛИКАЦИЮ.
+          // Именно поэтому переключение здесь безопасно и во время показа экрана, и
+          // посреди разговора: сама публикация микрофона не трогается вовсе.
+          await pub.track.setProcessor(proc);
+          RNN_PROC = proc;
+          RNN_ON = true;
+          cpuBad = 0;
+          await applyAudio(audioWant());
+          gainStart();
+          if (why && why !== 'тап') say('Шумодав включён (' + why + ').');
+        } else {
+          gainStop();
+          await pub.track.stopProcessor();
+          RNN_PROC = null;
+          RNN_ON = false;
+          await applyAudio(audioWant());
+          watchStart();
+          // ГОВОРИМ ВСЕГДА, А НЕ ТОЛЬКО ПО СВОЕМУ ТАПУ. Шумодав снимает ещё сторож
+          // процессора и админ, и молчаливое снятие человек услышит как «шум вернулся
+          // сам» - то есть пойдёт чинить микрофон. «Никаких уведомлений» из ТЗ - это про
+          // АДМИНА, которому не докладывают о чужом локальном выборе, а не про хозяина
+          // микрофона.
+          say(why === 'тап' ? 'Шумодав выключен.'
+                            : ('Шумодав выключен (' + (why || 'не мной') + ').'));
+        }
+      } catch (e) {
+        // ОСТАЁМСЯ НА ИСХОДНОЙ ДОРОЖКЕ И ВОЗВРАЩАЕМ ВСТРОЕННОЕ ПОДАВЛЕНИЕ: уйти
+        // одновременно без нашего и без браузерного значило бы оставить человека в эфире
+        // хуже, чем он был до тапа.
+        RNN_ON = false; RNN_PROC = null;
+        // ═══ СНИМАЕМ ПРОЦЕССОР ЯВНО, А НЕ НАДЕЕМСЯ НА SDK ═══
+        // `init` мог упасть ПОСЛЕ того, как livekit-client уже подменил дорожку у
+        // отправителя, - проверить это из контейнера нечем (закон №48), а цена ошибки
+        // здесь ТИШИНА В ЭФИРЕ: обработанной дорожки нет, а исходная уже не публикуется.
+        // Один безусловный `stopProcessor` делает вопрос неважным: что бы SDK ни успел,
+        // публикуется источник.
+        try { await pub.track.stopProcessor(); } catch (e2) {}
+        try { await applyAudio(audioWant()); } catch (e2) {}
+        // ═══ БРАУЗЕР НЕ ДАЁТ ЗАПУСТИТЬ ЗВУК БЕЗ ЖЕСТА - ЭТО НЕ ПОЛОМКА, А ОЖИДАНИЕ ═══
+        // Авто-включение при входе идёт БЕЗ жеста по построению, и на таком клиенте
+        // красная строка вылезала бы при КАЖДОМ заходе - то есть сторож кричал бы всегда,
+        // и на него перестали бы смотреть. Ждём первого касания и включаем молча; строка
+        // при этом всё равно есть, но спокойная и объясняющая, а не отказ.
+        var _needGesture = String((e && e.message) || '').indexOf('без твоего действия') >= 0;
+        if (_needGesture && why === 'по умолчанию') {
+          rnnArmGesture();
+          say('Шумодав включится при первом касании экрана: раньше браузер обработку '
+              + 'звука не запускает. Пока идёт встроенное подавление.');
+        } else {
+          // МОЛЧАЛИВЫХ ФОЛБЭКОВ ЗДЕСЬ НЕТ: неудачу видно строкой, а не по звуку. И строка
+          // называет ТО НАПРАВЛЕНИЕ, которое не вышло: «не включился» над упавшим
+          // ВЫКЛЮЧЕНИЕМ отправляет человека искать не ту поломку - тем более что снять
+          // шумодав могли не он, а сторож процессора или админ.
+          say((on ? 'Шумодав не включился (' : 'Шумодав не выключился (')
+              + (e && e.message || e) + '). Звук идёт как был.', true);
+        }
+        watchStart();
+      }
+      if (btn) btn.disabled = false;
+      rnnBusy = false;
+      rnnPaint();
+      rnnSay();
+      return RNN_ON === on;
+    }
+
+    // ═══ ЖДЁМ ПЕРВОГО КАСАНИЯ И ПРОБУЕМ СНОВА - ОДИН РАЗ ═══
+    // Условие, из-за которого мы не смогли включиться, снимается РОВНО ЖЕСТОМ, и ждать
+    // его дешевле, чем требовать от человека найти кнопку. Слушатель одноразовый: второй
+    // отказ уже не про жест, и крутить его по кругу значит скрывать настоящую причину.
+    var gestureArmed = false;
+    function rnnArmGesture() {
+      if (gestureArmed) return;
+      gestureArmed = true;
+      var fire = function () {
+        document.removeEventListener('pointerdown', fire, true);
+        document.removeEventListener('keydown', fire, true);
+        // РЕШЕНИЕ ЧЕЛОВЕКА МОГЛО ПОМЕНЯТЬСЯ, ПОКА МЫ ЖДАЛИ: он мог нажать «Подавить шум»
+        // сам либо, наоборот, выключить. Перепроверяем, а не включаем вслепую.
+        if (RNN_ON || rnnPrefGet() === 'off') return;
+        rnnApply(true, 'по умолчанию');
+      };
+      document.addEventListener('pointerdown', fire, true);
+      document.addEventListener('keydown', fire, true);
+    }
+
+    // ТАП ЧЕЛОВЕКА - ЭТО РЕШЕНИЕ, И ОНО ЗАПОМИНАЕТСЯ. Автоматика после него молчит
+    // навсегда; админ может попросить снова - он человек, а не правило.
+    async function rnnToggle() {
+      rnnPref(RNN_ON ? 'off' : 'on');
+      await rnnApply(!RNN_ON, 'тап');
+    }
+
+    // ═══ ПРОСЬБА АДМИНА: ПРИМЕНЯЕМ ЗДЕСЬ, ПРОЧИТАНА ОНА БЫЛА В showRec ═══
+    rnnPump = function () {
+      var w = rnnWant;
+      rnnWant = null;
+      if (!w) return;
+      // ЛОКАЛЬНОЕ РЕШЕНИЕ ПОБЕЖДАЕТ - НО НЕ ЗАДНИМ ЧИСЛОМ. Просьба свежее его, значит
+      // админ действовал ПОСЛЕ и знает, что делает; выключить обратно человек может тем
+      // же тапом, и уведомления об этом никто не получит.
+      rnnApply(w.on, w.by ? ('просьба: ' + w.by) : 'просьба админа');
+    };
 
     // ═══ ПОКАЗ ЭКРАНА: КНОПКА ПО НАЛИЧИЮ МЕТОДА, А НЕ ПО ПЛАТФОРМЕ ═══
     // Живая проба (Ren 24.08): desktop отдаёт поток 2880x1448@30 со звуком вкладки,
@@ -1457,7 +2751,9 @@ registerProcessor('rnn-denoise', RnnProc);
     // отсутствие API: подсказывать нечего, включать нечего.
     // ПРОВЕРЯЕМ МЕТОД, А НЕ UserAgent: UA врёт (режим «для компьютеров» на телефоне),
     // наличие метода - факт.
-    var md = navigator.mediaDevices || {};
+    // ПРИЗНАК ОДИН НА СТРАНИЦУ (`HAS_DISPLAY`, объявлен выше): дефолт шумодава спрашивает
+    // РОВНО ТО ЖЕ, что решает судьбу этой кнопки, и вторая копия проверки разошлась бы с
+    // первой на первой правке.
     // ДВА УСЛОВИЯ, И ОНИ РАЗНЫЕ. Метод - что умеет КЛИЕНТ; грант - что разрешил СЕРВЕР.
     // Второе без первого бесполезно, первое без второго ВИСНЕТ вместо отказа.
     var g = grantOf(j.token), srcs = g.canPublishSources || [];
@@ -1466,8 +2762,8 @@ registerProcessor('rnn-denoise', RnnProc);
     // Прежняя редакция показывала камеру ТОЛЬКО там, где нет экрана, - как замену. Это
     // неверно: с компьютера тоже надо показать себя, особенно когда экран показывать
     // нечего. Делить по устройству оправдано лишь у экрана, где метода физически нет.
-    var canScreen = !!md.getDisplayMedia && mayScreen;
-    var canCam = !!md.getUserMedia && mayCam;
+    var canScreen = HAS_DISPLAY && mayScreen;
+    var canCam = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && mayCam;
     var showBtn = $('show'), camBtn = $('cam');
 
     if (!mayScreen && !mayCam) {
@@ -1484,14 +2780,20 @@ registerProcessor('rnn-denoise', RnnProc);
           + 'браузеров. Запись экрана можно снять системой и прислать файлом в чат. '
           + 'Камера и просмотр чужого экрана работают отсюда.';
     }
-    showBtn.textContent = '🖥 Показать экран';
+    barLabel(showBtn, '🖥', 'Экран');
 
     // ═══ ОДНА ДВЕРЬ НА ОБА ПОКАЗА, РАЗНЫЕ ТОЛЬКО ИСТОЧНИК И ПОДПИСЬ ═══
     // Две копии «включить/выключить» разошлись бы на первой правке (закон №40), а тут
     // цена расхождения - висящая дорожка, которую видно СОСЕДЯМ, а не нам.
-    function toggler(btn, kind, onLabel, offLabel) {
+    function toggler(btn, kind, offIcon, word) {
       var live = false;
       btn.onclick = async function () {
+        // ДВА ОДНОВРЕМЕННЫХ ВЫЗОВА ОДНОГО ИСТОЧНИКА - ВТОРОЙ ИСТОЧНИК ТОЙ ЖЕ ОШИБКИ.
+        // livekit-client ждёт незавершённую операцию и падает «waiting for pending
+        // publication promise timed out»; нетерпеливый двойной тап по «Показать экран»
+        // воспроизводит это без всякого таймаута.
+        if (btn.disabled) return;
+        btn.disabled = true;
         if (live) {
           try {
             // ВЫКЛЮЧАЕМ ТЕМ ЖЕ МЕТОДОМ, ЧТО ВКЛЮЧАЛИ. Прежняя редакция звала
@@ -1511,10 +2813,12 @@ registerProcessor('rnn-denoise', RnnProc);
             else await room.localParticipant.setCameraEnabled(false);
           } catch (e) {
             say('Не удалось остановить показ: ' + (e && e.message || e), true);
+            btn.disabled = false;
             return;
           }
-          live = false; btn.classList.remove('on'); btn.textContent = offLabel;
+          live = false; btn.classList.remove('on'); barLabel(btn, offIcon, word);
           say('');
+          btn.disabled = false;
           return;
         }
         try {
@@ -1526,20 +2830,51 @@ registerProcessor('rnn-denoise', RnnProc);
             ? room.localParticipant.setScreenShareEnabled(
                 true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
             : room.localParticipant.setCameraEnabled(true);
+          // ═══ БРОШЕННОЕ ОЖИДАНИЕ ОСТАВЛЯЕТ ПУБЛИКАЦИЮ ВИСЕТЬ, И СЛЕДУЮЩИЙ ТАП ПАДАЕТ ═══
+          // ЖИВОЙ ОТКАЗ REN: «waiting for pending publication promise timed out». Это
+          // сообщение livekit-client, и производил его МОЙ ЖЕ предохранитель: `race`
+          // отменяет ОЖИДАНИЕ, а операция внутри SDK остаётся в работе. Источник
+          // числится «публикуется», и второй тап ждёт её и падает - ровно тот класс, что
+          // записан про `wait_for` (отменили ожидание, процесс живёт).
+          // ПОЭТОМУ ПОСЛЕ ТАЙМАУТА МЫ ОБЯЗАНЫ ЕЁ УСПОКОИТЬ, а не просто отпустить.
+          var lost = false;
           await Promise.race([pub, new Promise(function (_, rej) {
             setTimeout(function () {
+              lost = true;
               rej(new Error('сервер не принял дорожку за 12 с. Чаще всего это старый токен '
                             + 'без права показа: у нас не выложен Worker.'));
             }, 12000);
           })]);
-          live = true; btn.classList.add('on'); btn.textContent = onLabel;
+          live = true; btn.classList.add('on'); barLabel(btn, '⏹', word);
         } catch (e) {
           // ПРИЧИНА НАЗЫВАЕТСЯ ВСЕГДА: отказ в разрешении и отсутствие метода лечатся
           // по-разному, и «не получилось» отправило бы человека чинить не то.
+          if (lost) {
+            // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
+            // методом, которым включали: только он умеет снять состояние «публикуется».
+            try { await (kind === 'screen'
+              ? room.localParticipant.setScreenShareEnabled(false)
+              : room.localParticipant.setCameraEnabled(false)); } catch (e2) {}
+            // А ЕСЛИ ОНА ВСЁ-ТАКИ ДОЕДЕТ ПОЗЖЕ - СНИМАЕМ И ЕЁ. Иначе человек показывает
+            // экран, будучи уверенным, что не показывает, и выключить нечем: кнопка у
+            // него говорит «Показать».
+            try {
+              pub.then(function () {
+                if (live) return;
+                try { stopLocalMedia(kind); } catch (e3) {}
+                try { (kind === 'screen'
+                  ? room.localParticipant.setScreenShareEnabled(false)
+                  : room.localParticipant.setCameraEnabled(false)); } catch (e3) {}
+                say('Дорожка доехала уже после отказа - снял её. Попробуй ещё раз.', true);
+              }, function () {});
+            } catch (e4) {}
+          }
           stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
-          live = false; btn.classList.remove('on'); btn.textContent = offLabel;
+          live = false; btn.classList.remove('on'); barLabel(btn, offIcon, word);
           say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
               + (e && e.message || e), true);
+        } finally {
+          btn.disabled = false;
         }
       };
     }
@@ -1564,8 +2899,8 @@ registerProcessor('rnn-denoise', RnnProc);
       } catch (e) {}
     }
 
-    toggler(showBtn, 'screen', '⏹ Остановить показ', '🖥 Показать экран');
-    toggler(camBtn, 'camera', '⏹ Выключить камеру', '📷 Показать камеру');
+    toggler(showBtn, 'screen', '🖥', 'Экран');
+    toggler(camBtn, 'camera', '📷', 'Камера');
 
     // ═══ РУКА И ОЧЕРЕДЬ СЛОВА - ПО КАНАЛУ ДАННЫХ LIVEKIT ═══
     // Он идёт по тому же соединению, что звук: это на порядок быстрее опроса нашего ящика
@@ -1606,6 +2941,11 @@ registerProcessor('rnn-denoise', RnnProc);
     // одним счётчиком это не закрыть, потому что у них разные владельцы.
     var lastReact = 0, lastFrom = {};
     function canReact() {
+      // ЗАПРЕТ АДМИНА СТОИТ ЗДЕСЬ, В ОДНОЙ ДВЕРИ НА ЭМОДЗИ И ЗВУКИ. Две копии проверки
+      // разошлись бы на первой правке, и заглушенный продолжал бы слать что-нибудь одно.
+      // ЭТО НЕ ЗАЩИТА, А ЧЕСТНОСТЬ: настоящий запрет исполняют ПОЛУЧАТЕЛИ, здесь мы
+      // просто не делаем вид, что кнопка сработала.
+      if (iAmFunOff()) { funPaint(); return false; }
       var now = Date.now();
       if (now - lastReact < 600) return false;
       lastReact = now;
@@ -1782,16 +3122,49 @@ registerProcessor('rnn-denoise', RnnProc);
       return /^(1|3|5|15|30|60|120|240|D|W|M)$/.test(v) ? v : '';
     }
 
+    // ═══ ВИДЖЕТ ПЕРЕСОБИРАЕТСЯ ТОЛЬКО КОГДА МЕНЯЮТСЯ ЕГО ВХОДЫ ═══
+    // ЖИВОЙ ОТКАЗ REN: «график пересоздаётся у ВСЕХ при любом действии» - мигание,
+    // сброшенный масштаб, потерянное место на свечах. Механизм наш и виден по коду:
+    // владелец графика шлёт `{t:'chart'}` СЕРДЦЕБИЕНИЕМ раз в пять секунд (чтобы догнать
+    // вошедшего позже), каждый получатель звал `chartSet` -> `chartPaint`, а тот СНОСИЛ
+    // коробку и заново грузил скрипт TradingView. То есть у всех, кроме владельца, график
+    // рождался заново каждые пять секунд - и любой штрих или `ask` добавлял ещё один раз.
+    // Виджет тут ни при чём: наружного API у бесплатного встраиваемого графика нет, и
+    // сменить символ «на лету» правда нельзя, - но и пересобирать его при НЕИЗМЕННЫХ
+    // символе и таймфрейме незачем. `chBuilt` помнит, ЧТО реально стоит в коробке.
+    var chBuilt = '';
     function chartPaint() {
       var box = $('chartbox');
       $('crypto').style.display = chOpen ? '' : 'none';
       $('chart').classList.toggle('on', chOpen);
       if (!chOpen) return;
-      // ХОЛСТ ПЕРЕЖИВАЕТ ПЕРЕСОЗДАНИЕ ГРАФИКА: он лежит В ТОЙ ЖЕ коробке, и снеси мы её
-      // целиком - вместе с чужим графиком стёрлись бы все чужие штрихи.
-      var keep = $('draw');
-      [].slice.call(box.children).forEach(function (c) { if (c !== keep) box.removeChild(c); });
       paintSymBtns();
+      var want = chSym ? (chSym + '|' + chTf) : '';
+      if (want !== chBuilt) {
+        // ХОЛСТ ПЕРЕЖИВАЕТ ПЕРЕСОЗДАНИЕ ГРАФИКА: он лежит В ТОЙ ЖЕ коробке, и снеси мы её
+        // целиком - вместе с чужим графиком стёрлись бы все чужие штрихи.
+        var keep = $('draw');
+        [].slice.call(box.children).forEach(function (c) {
+          if (c !== keep) box.removeChild(c);
+        });
+        chBuilt = want;
+        if (want) {
+          var host = document.createElement('div');
+          host.className = 'tvhost';
+          host.style.cssText = 'position:absolute;inset:0';
+          box.insertBefore(host, keep);
+          var sc = document.createElement('script');
+          sc.src = 'https://s3.tradingview.com/external-embedding/'
+                 + 'embed-widget-advanced-chart.js';
+          sc.async = true;
+          sc.text = JSON.stringify({
+            symbol: chSym, interval: chTf, theme: 'dark', style: '1', locale: 'ru',
+            hide_side_toolbar: true, hide_top_toolbar: false, allow_symbol_change: false,
+            save_image: false, autosize: true,
+          });
+          host.appendChild(sc);
+        }
+      }
       if (!chSym) {
         // ДОСКА ОСТАЁТСЯ - ОНА ПОЛЕЗНА И САМА ПО СЕБЕ. Убрали график, чтобы чертить схему
         // на чистом поле, а не чтобы закрыть панель.
@@ -1799,21 +3172,9 @@ registerProcessor('rnn-denoise', RnnProc);
           + 'график: его увидят все, кто в комнате.';
         return;
       }
-      var host = document.createElement('div');
-      host.style.cssText = 'position:absolute;inset:0';
-      box.insertBefore(host, keep);
-      var sc = document.createElement('script');
-      sc.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-      sc.async = true;
-      sc.text = JSON.stringify({
-        symbol: chSym, interval: chTf, theme: 'dark', style: '1', locale: 'ru',
-        hide_side_toolbar: true, hide_top_toolbar: false, allow_symbol_change: false,
-        save_image: false, autosize: true,
-      });
-      host.appendChild(sc);
+      // ПОДПИСЬ ОБНОВЛЯЕТСЯ ВСЕГДА - ОНА ДЕШЁВАЯ И МЕНЯЕТСЯ ЧАЩЕ ГРАФИКА (кто поставил).
       $('chartwho').textContent = chSym + ' · ' + chTf
         + (chBy ? ' · поставил ' + chBy : '');
-      paintSymBtns();
     }
 
     function chartSet(sym, tf, by, mine) {
@@ -2170,6 +3531,21 @@ registerProcessor('rnn-denoise', RnnProc);
     paintTools();
     window.addEventListener('resize', cvDraw);
 
+    // ═══ ЗАМОК АДМИНА: ПАНЕЛЬ УБИРАЕТСЯ У ВСЕХ, А НЕ ПРОСТО ЗАКРЫВАЕТСЯ У СЕБЯ ═══
+    // Кнопка, которая после замка молча ничего не делает, читается как поломка (закон
+    // №36): вместо неё стоит СТРОКА с причиной. Админу кнопка остаётся - он и отпирает.
+    lockPaint = function () {
+      var b = $('chart');
+      var off = lockOn && !iAmAdm;
+      b.style.display = off ? 'none' : '';
+      $('lockwhy').textContent = lockOn
+        ? ('Доску и график убрал админ комнаты.'
+           + (iAmAdm ? ' Вернуть - кнопкой в админском блоке.' : ''))
+        : '';
+      if (lockOn && chOpen) { chOpen = false; chartPaint(); }
+    };
+    lockPaint();
+
     $('chart').onclick = function () {
       chOpen = !chOpen;
       chartPaint();
@@ -2425,7 +3801,9 @@ registerProcessor('rnn-denoise', RnnProc);
         var _was = subOn;
         say(_was ? 'Прошу бота выключить распознавание…'
                  : 'Прошу бота включить распознавание…');
-        await ask({ kind: 'rtcsub', room: ROOM });
+        await ask({ kind: 'rtcsub', room: ROOM },
+                  'Распознавание общее на комнату: когда бот дойдёт, лента появится '
+                  + 'у всех сама.');
         subBtn.disabled = false;
         // ВЫКЛЮЧЕНИЕ ОБЩЕГО - С ОГЛАСКОЙ. Оно стоит денег и касается всех, поэтому
         // комната узнаёт, КТО его снял: молча погасшая лента читается как поломка.
@@ -2496,15 +3874,61 @@ registerProcessor('rnn-denoise', RnnProc);
       recBtn.onclick = async function () {
         recBtn.disabled = true;
         say(recOn ? 'Останавливаю запись…' : 'Прошу бота начать запись…');
-        await ask({ kind: 'rtcrec', room: ROOM });
+        await ask({ kind: 'rtcrec', room: ROOM },
+                  'Если запись пойдёт, наверху появится красная строка.');
         recBtn.disabled = false;
+      };
+    }
+
+    // ═══ АДМИНСКИЕ ДЕЙСТВИЯ: КНОПКА ЕСТЬ ТОЛЬКО У ТОГО, У КОГО ЕСТЬ ПРАВО ═══
+    // Право всё равно проверяет БОТ (закон №32) - `callback` от клиента ничего не
+    // доказывает. Здесь мы решаем лишь, что ПОКАЗЫВАТЬ: кнопка, отвечающая «это может
+    // только админ», хуже отсутствующей.
+    if (initData) {
+      $('admdj').onclick = function () {
+        ask({ kind: 'rtcadm', room: ROOM, act: 'dj_off' }, 'Прошу бота выключить радио…');
+      };
+      $('admsub').onclick = function () {
+        ask({ kind: 'rtcadm', room: ROOM, act: 'subs_off' },
+            'Прошу бота выключить распознавание…');
+      };
+      // ЗАМОК - ПЕРЕКЛЮЧАТЕЛЬ, А НЕ ОДНОСТОРОННЕЕ ДЕЙСТВИЕ (закон №55): запертую доску
+      // обязано быть чем отпереть, иначе первый же тап заканчивает совместную работу
+      // до конца созвона.
+      // ДЕЙСТВИЕ НАД УЧАСТНИКОМ - ТА ЖЕ ДВЕРЬ, ЧТО У КНОПОК КОМНАТЫ (закон №40): вторая
+      // копия круга через ящик разошлась бы с первой на первой же правке.
+      // ═══ СВЯЗЬ УЕЗЖАЕТ БОТУ РАЗ В МИНУТУ И ТОЛЬКО ОТ АДМИНА ═══
+      // Числа собирает КАЖДЫЙ у себя (иначе они были бы про чужой канал), но в лог и в
+      // итог созвона нужен ОДИН снимок: пришли его все, мы получили бы N копий одного
+      // разговора и заплатили бы за это опросом ящика.
+      admDo = function (act, target, nm) {
+        var w = { mute: 'заглушить', kick: 'отключить от комнаты',
+                  admin: 'сделать админом', rnn_on: 'включить шумодав',
+                  rnn_off: 'выключить шумодав',
+                  fun_off: 'запретить реакции и звуки',
+                  fun_on: 'вернуть реакции и звуки' }[act] || act;
+        ask({ kind: 'rtcadm', room: ROOM, act: act, nm: target },
+            'Прошу бота ' + w + ': ' + (nm || target) + '…');
+      };
+      // ═══ «ШУМОДАВ ВСЕМ» - ТОЖЕ ПЕРЕКЛЮЧАТЕЛЬ, И ОБРАТНЫЙ ПУТЬ У НЕГО СВОЙ ═══
+      // Состояние тут не «включён у всех» (этого мы знать не можем), а «последняя просьба
+      // всем была на включение» - и это честно: подпись называет, что сделает ТАП, а
+      // фактическое состояние каждого стоит рядом с его именем в списке.
+      $('admrnn').onclick = function () {
+        ask({ kind: 'rtcadm', room: ROOM, act: rnnAllOn ? 'rnnall_off' : 'rnnall_on' },
+            rnnAllOn ? 'Прошу всех снять шумодав…' : 'Прошу всех включить шумодав…');
+      };
+      $('admlock').onclick = function () {
+        ask({ kind: 'rtcadm', room: ROOM, act: lockOn ? 'unlock' : 'lock' },
+            lockOn ? 'Прошу бота вернуть доску и график…'
+                   : 'Прошу бота убрать доску и график у всех…');
       };
     }
 
     // ОДНА ДВЕРЬ «ПОЛОЖИТЬ СИГНАЛ И ДОЖДАТЬСЯ ОТВЕТА» НА ВСЕ КНОПКИ КОМНАТЫ. Две копии
     // этого круга разошлись бы на первой правке - например, одна научилась бы объяснять
     // `bad_kind`, а вторая продолжала бы показывать человеку машинный код (закон №40).
-    async function ask(body) {
+    async function ask(body, hint) {
       try {
         var r = await fetch(API + '/signal', {
           method: 'POST',
@@ -2527,7 +3951,7 @@ registerProcessor('rnn-denoise', RnnProc);
         // ОТВЕТ БОТА ВОЗВРАЩАЕТСЯ НАВЕРХ ЦЕЛИКОМ: каталогу станций нужен не факт
         // «дошло», а сами данные. Раньше дверь отдавала true/false, и второй вызывающий
         // завёл бы себе свой круг опроса - две копии разошлись бы на первой правке.
-        return await waitRec(j.id);
+        return await waitRec(j.id, hint);
       } catch (e) {
         say('Не достучался до бота: ' + (e && e.message || e), true);
         return false;
@@ -2583,7 +4007,8 @@ registerProcessor('rnn-denoise', RnnProc);
       djOff = async function () {
         djBtn.disabled = true;
         say('Выключаю радио…');
-        await ask({ kind: 'rtcdj', room: ROOM });
+        await ask({ kind: 'rtcdj', room: ROOM },
+                  'Если радио заиграет, оно появится в списке участников.');
         djBtn.disabled = false;
         // ЗВУК СНИМАЕМ САМИ, НЕ ДОЖИДАЯСЬ ПРИЗНАКА КОМНАТЫ. Признак придёт и снимет его
         // же (`dropDj` идемпотентен), но именно у НАЖАВШЕГО событие может опоздать или не
@@ -2657,7 +4082,8 @@ registerProcessor('rnn-denoise', RnnProc);
           $('rnote').textContent = 'Включаю ' + st.name + '…';
           // ЕДЕТ ИДЕНТИФИКАТОР, А НЕ АДРЕС: поток резолвит бот, и белый список
           // источников остаётся непроходимым.
-          await ask({ kind: 'rtcdj', room: ROOM, st: st.id });
+          await ask({ kind: 'rtcdj', room: ROOM, st: st.id },
+                    'Если станция заиграет, она появится в списке участников.');
           $('radio').style.display = 'none';
         };
         list.appendChild(b);
@@ -2670,7 +4096,7 @@ registerProcessor('rnn-denoise', RnnProc);
     // ОТВЕТ ЗАБИРАЕМ ИЗ ЯЩИКА, А НЕ СЧИТАЕМ РАБОТУ СДЕЛАННОЙ ПО ФАКТУ ОТПРАВКИ (закон
     // №35): «сигнал положен» и «бот записывает» - разные утверждения, и второе бывает
     // ложным (нет ключей, никто не включил микрофон, Egress не поднят).
-    async function waitRec(id) {
+    async function waitRec(id, hint) {
       for (var i = 0; i < 20; i++) {
         await new Promise(function (ok) { setTimeout(ok, 1200); });
         var res = null;
@@ -2684,9 +4110,12 @@ registerProcessor('rnn-denoise', RnnProc);
         if (note) say(note);
         return res.res || {};
       }
-      // МОЛЧАНИЕ НАЗЫВАЕТСЯ МОЛЧАНИЕМ. Крутилка без конца читается как «сломалось», а
-      // индикатор записи придёт сам, когда бот дойдёт: он живёт в метаданных комнаты.
-      say('Бот пока не ответил. Если запись пойдёт, наверху появится красная строка.');
+      // МОЛЧАНИЕ НАЗЫВАЕТСЯ МОЛЧАНИЕМ. Крутилка без конца читается как «сломалось».
+      // ХВОСТ ФРАЗЫ ПРИНАДЛЕЖИТ ВЫЗЫВАЮЩЕМУ, А НЕ ЭТОЙ ФУНКЦИИ. Здесь стояло «если
+      // ЗАПИСЬ пойдёт, наверху появится красная строка» - текст от одной кнопки на всех,
+      // и человек, включавший СУБТИТРЫ, читал про запись (замечание Ren 27.08). Дверь
+      // одна на пять кнопок, значит и подсказку даёт та, что знает, чего ждать.
+      say('Бот пока не ответил.' + (hint ? ' ' + hint : ''));
       return null;
     }
 
@@ -2695,6 +4124,16 @@ registerProcessor('rnn-denoise', RnnProc);
       try { m = JSON.parse(new TextDecoder().decode(payload)); } catch (e) { return; }
       if (!m || !m.t) return;
       if (m.t === 'hand' && p) upsert(p.identity, { hand: m.up ? Date.now() : 0 });
+      // СОСТОЯНИЕ ШУМОДАВА СОСЕДА - ФАКТ ОТ НЕГО САМОГО. Админу в списке нужен не «что я
+      // попросил», а «что у него правда включено»: просьба могла не исполниться (нет
+      // wasm, не тот sampleRate) или человек выключил её обратно тем же тапом.
+      if (m.t === 'rnn' && p) upsert(p.identity, { rnn: !!m.on });
+      // ═══ ЗАПРЕТ ИСПОЛНЯЕТ ПОЛУЧАТЕЛЬ, А НЕ ОТПРАВИТЕЛЬ (закон №32) ═══
+      // Реакции и звуки едут КЛИЕНТ-КЛИЕНТУ по каналу данных, бот их не видит вовсе.
+      // Спрячь мы кнопки только у заглушенного - открытая консоль обходит запрет за
+      // секунду, и «заглушил» превратилось бы в уговор. Поэтому решает КАЖДЫЙ у себя:
+      // от молчуна не появится ни всплывашки, ни гонга, что бы он ни прислал.
+      if ((m.t === 'react' || m.t === 'snd') && p && funOff[String(p.identity)]) return;
       if (m.t === 'react' && p && floodOk(p.identity)) {
         // ЭМОДЗИ РЕЖЕМ ПО ДЛИНЕ: в поле приходит строка от клиента, и «реакцией» на
         // килобайт текста можно было бы закрыть соседу пол-экрана.
@@ -2789,6 +4228,10 @@ registerProcessor('rnn-denoise', RnnProc);
         if (strokes.length) cvSendHistory();
         if (ama.length) send({ t: 'amast', s: ama.slice(0, AMA_MAX) });
         if (poll) send({ t: 'pollst', s: poll });
+        // ПРО ШУМОДАВ ОТВЕЧАЮТ ВСЕ, А НЕ ТОЛЬКО ВКЛЮЧИВШИЕ: «выключен» здесь такой же
+        // ответ, как «включён». Промолчи выключившие - в списке у админа они выглядели бы
+        // «неизвестно», и он не отличил бы их от тех, кто ещё не ответил.
+        send({ t: 'rnn', on: RNN_ON });
       }
       if (m.t === 'tmr') {
         // ЧУЖОЙ ТАЙМЕР ЗАМЕНЯЕТ НАШ, А НЕ ВСТАЁТ ВТОРЫМ: таймер тут один на комнату, и
@@ -2805,8 +4248,8 @@ registerProcessor('rnn-denoise', RnnProc);
         if (m.do === 'quiet') {
           micOn = false;
           try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
-          $('mic').textContent = '🎙 Включить микрофон';
-          $('mic').classList.add('off');
+          barLabel($('mic'), '🔇', 'Микрофон');
+          $('mic').className = 'off';
           say(_who + ' попросил тебя приглушиться - микрофон выключен. Включить можно '
               + 'кнопкой внизу.');
         } else if (m.do === 'bye') {
@@ -2821,8 +4264,8 @@ registerProcessor('rnn-denoise', RnnProc);
       if (m.t === 'hush') {
         micOn = false;
         try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
-        $('mic').textContent = '🎙 Включить микрофон';
-        $('mic').classList.add('off');
+        barLabel($('mic'), '🔇', 'Микрофон');
+        $('mic').className = 'off';
         say('Ведущий попросил тишины - твой микрофон выключен.');
       }
     }
@@ -2835,6 +4278,10 @@ registerProcessor('rnn-denoise', RnnProc);
     // пяти секунд перед пустым графиком человек читает как «не работает», а доску
     // сердцебиение не догоняет вовсе - она слишком большая, чтобы слать её по кругу.
     setTimeout(function () { try { send({ t: 'ask' }); } catch (e) {} }, 900);
+    // КТО Я - СПРАШИВАЕМ У КОМНАТЫ, А НЕ СЧИТАЕМ САМИ. Токен уже подписан, identity в
+    // нём боевое; свой разбор initData разошёлся бы с тем, что видит сервер.
+    myIdent = room.localParticipant.identity;
+    showRec();                     // админский блок обязан появиться, а не ждать метаданных
     upsert(room.localParticipant.identity, { name: 'Ты', me: true });
     room.remoteParticipants.forEach(function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
@@ -2843,12 +4290,80 @@ registerProcessor('rnn-denoise', RnnProc);
     say('');
   }
 
+  // ═══ «ЕЩЁ» И «РЕАКЦИИ»: РАСКРЫВАЮТСЯ ПО ЗАПРОСУ ═══
+  // ЖИВОЙ ОТЗЫВ REN ПОСЛЕ СОЗВОНА: «восемь эмодзи, восемь звуков, десяток кнопок - всё
+  // сразу на виду». Логика Zoom/Meet, а не их раскладка: внизу то, чем пользуются В
+  // КАЖДОМ созвоне, остальное - за одной кнопкой. Реакции - ОДИН жест «отозваться», а не
+  // шестнадцать кнопок на экране.
+  // ЭТО ПЕРЕКЛЮЧАТЕЛИ, И У НИХ ЕСТЬ ОБРАТНЫЙ ПУТЬ (закон №55): повторный тап закрывает.
+  function fold(btnId, cardId) {
+    var b = $(btnId), c = $(cardId);
+    b.onclick = function () {
+      var open = c.style.display === 'none';
+      c.style.display = open ? '' : 'none';
+      b.classList.toggle('on', open);
+      // ОТКРЫЛИ - ПОКАЗЫВАЕМ ЦЕЛИКОМ: раскрытая панель, половина которой ушла за нижний
+      // край, читается как обрезанная.
+      if (open) { try { c.scrollIntoView({ block: 'nearest' }); } catch (e) {} }
+    };
+  }
+  fold('more', 'tools');
+  fold('barreact', 'react');
+
+  // ═══ РАСКЛАДКА ПО КРУГУ, И КРУГ ЗАМКНУТ ═══
+  // Три состояния, а не два, поэтому обратный путь тут - вернуться в исходное, а не
+  // «выключить». Круг обязан замыкаться: раскладка, из которой нельзя вернуться в авто,
+  // это тот же переключатель без обратного пути (закон №55).
+  $('lay').onclick = function () {
+    layMode = (layMode === 'auto') ? 'grid' : (layMode === 'grid' ? 'spk' : 'auto');
+    layPaint();
+    say(layMode === 'auto'
+        ? 'Раскладка авто: одно видео во всю ширину, два и больше - сеткой.'
+        : (layMode === 'grid' ? 'Сетка: все окна одного размера.'
+                              : 'Крупно: говорящий большой, остальные лентой.'));
+  };
+
+  $('full').onclick = async function () {
+    // ПРОСИМ ТОГО, КТО УМЕЕТ, И ГОВОРИМ, ЕСЛИ НЕ ВЫШЛО. Telegram отвечает событием
+    // `fullscreenChanged`, браузер - `fullscreenchange`; на оба и опираемся, а не на
+    // собственную догадку о том, получилось ли (закон №35).
+    try {
+      if (tg && typeof tg.requestFullscreen === 'function') {
+        if (fullOn) tg.exitFullscreen(); else tg.requestFullscreen();
+      } else if (fullOn) {
+        await document.exitFullscreen();
+      } else {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch (e) {
+      say('Во весь экран не вышло: ' + (e && e.message || e), true);
+    }
+  };
+  try {
+    if (tg && tg.onEvent) {
+      tg.onEvent('fullscreenChanged', function () {
+        fullOn = !!tg.isFullscreen; fullPaint();
+      });
+      tg.onEvent('fullscreenFailed', function (e) {
+        fullOn = false; fullPaint();
+        say('Клиент не дал развернуть на весь экран'
+            + (e && e.error ? ' (' + e.error + ')' : '') + '.', true);
+      });
+    }
+  } catch (e) {}
+  document.addEventListener('fullscreenchange', function () {
+    if (tg && typeof tg.requestFullscreen === 'function') return;   // там своё событие
+    fullOn = !!document.fullscreenElement; fullPaint();
+  });
+  fullPaint();
+  layPaint();
+
   $('mic').onclick = async function () {
     if (!room) return;
     micOn = !micOn;
     try { await room.localParticipant.setMicrophoneEnabled(micOn); } catch (e) {}
-    $('mic').textContent = micOn ? '🎙 Выключить микрофон' : '🔇 Включить микрофон';
-    $('mic').className = micOn ? '' : 'off';
+    $('mic').className = micOn ? 'on' : 'off';
+    barLabel($('mic'), micOn ? '🎙' : '🔇', 'Микрофон');
     upsert(room.localParticipant.identity, { muted: !micOn });
   };
   $('out').onclick = async function () {
