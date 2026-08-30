@@ -51,9 +51,21 @@
   #screens.grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
   #screens.grid .vwrap { margin:0; }
   #screens.spk { display:flex; flex-direction:column; }
-  #screens.spk .vwrap.big { order:0; }
-  #screens.spk .vwrap.small { order:1; width:34%; display:inline-block; }
-  #screens.spk .strip { order:1; display:flex; gap:6px; overflow-x:auto; }
+  #screens.spk .vwrap.big { order:0; height:var(--bigh, 46vh); }
+  #screens.spk .vwrap.big video { height:100%; object-fit:contain; }
+  #screens.spk .vwrap.small { order:2; width:34%; display:inline-block; }
+  #screens.spk .strip { order:2; display:flex; gap:6px; overflow-x:auto; }
+  /* ДЕЛИТЕЛЬ - РАЗМЕР ТОЛЬКО У СЕБЯ. Он не едет в комнату ни одним байтом: человек
+     подстраивает СВОЙ экран и никого не двигает. Полоса широкая нарочно - пальцем в
+     четыре пикселя не попасть. */
+  #vsplit { order:1; height:16px; margin:2px 0; cursor:row-resize; border-radius:8px;
+            background:rgba(255,255,255,.10); position:relative; touch-action:none; }
+  #vsplit::after { content:''; position:absolute; left:50%; top:50%; width:44px; height:4px;
+                   margin:-2px 0 0 -22px; border-radius:2px; background:rgba(255,255,255,.45); }
+  #screens .vpin { position:absolute; right:6px; top:6px; padding:2px 7px; font-size:12px;
+                   line-height:18px; border-radius:8px; border:0; cursor:pointer;
+                   background:rgba(0,0,0,.55); color:#fff; }
+  #screens .vwrap.pinned .vpin { background:rgba(255,255,255,.85); color:#000; }
   .hand { color:#ffd166; font-size:12px; }
   .err { color:var(--bad); }
   /* ИНДИКАТОР ЗАПИСИ ВИДЕН БЕЗ ПОИСКА ГЛАЗАМИ: он про то, что разговор сохраняется, и
@@ -344,7 +356,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'cf45a3c58e60';
+  var VERSION = 'ab978200efc0';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -558,6 +570,9 @@
   //: зашёл. Пусто - решения не было, и автоматика вправе включить сама.
   var RNN_PREF_KEY = 'rtc_rnn_pref';
 
+  // СКОЛЬКО ЖДЁМ МИКРОФОН НА ВХОДЕ. Меньше сторожа загрузки (`BOOT_LIMIT_MS`), иначе тот
+  // сработает первым и назовёт стадию вместо того, чтобы дать войти без микрофона.
+  var MIC_BOOT_MS = 8000;
   var room = null, people = {}, micOn = true, recOn = false, djOn = false,
       subOn = false;
   //: ═══ ШУМОДАВ: СОСТОЯНИЕ ЖИВЁТ СНАРУЖИ КОМНАТЫ, И ЭТО НЕ ВКУСОВЩИНА ═══
@@ -931,7 +946,16 @@
     lockOn = !!(m && m.lock);
     $('admlock').textContent = lockOn ? '🔓 Вернуть доску и график'
                                       : '🔒 Убрать доску и график';
-    if (lockOn !== _wasLock || meta === undefined) lockPaint();
+    // ═══ КРАСИМ ВСЕГДА, А НЕ ТОЛЬКО НА СМЕНЕ ЗНАЧЕНИЯ ═══
+    // Здесь стояло `if (lockOn !== _wasLock || meta === undefined)`, то есть отрисовка
+    // зависела от того, совпало ли прошлое состояние с новым. Совпасть оно может по
+    // множеству причин, к замку отношения не имеющих (второй клиент того же человека,
+    // догон метаданных при входе, повторная доставка), и тогда экран остаётся прежним
+    // при верном состоянии - ровно то, о чём отчёт 29.08: «бот сказал убрал, а доска
+    // осталась». Отрисовка ничего не стоит и идемпотентна; экономия на ней покупала
+    // класс багов, который нечем увидеть.
+    void _wasLock;
+    lockPaint();
     // ═══ ПРОСЬБА АДМИНА ПРО ШУМОДАВ: ЧИТАЕМ ЗДЕСЬ, ПРИМЕНЯЕМ В go() ═══
     // Метаданные - ЕДИНСТВЕННЫЙ канал от бота до чужого клиента (серверного «включи ему
     // шумодав» у LiveKit нет вовсе), и он же единственный, кто догоняет вошедшего позже.
@@ -992,6 +1016,24 @@
   var vids = [];
   var layMode = 'auto';
   var LAY_NAMES = { auto: 'авто', grid: 'сетка', spk: 'крупно' };
+  // ЗАКРЕПЛЁННОЕ ОКНО И ВЫСОТА ДЕЛИТЕЛЯ - ЛИЧНЫЕ И ПЕРЕЖИВАЮТ ЗАХОД. В комнату не едет
+  // ничего: подстроил себе - у соседей ни один пиксель не сдвинулся.
+  var layPin = '';
+  var layBigH = 0;
+  try {
+    layPin = localStorage.getItem('rtc_lay_pin') || '';
+    layBigH = parseInt(localStorage.getItem('rtc_lay_bigh') || '0', 10) || 0;
+    layMode = localStorage.getItem('rtc_lay_mode') || 'auto';
+    if (!LAY_NAMES[layMode]) layMode = 'auto';
+  } catch (e) {}
+
+  function laySave() {
+    try {
+      localStorage.setItem('rtc_lay_pin', layPin || '');
+      localStorage.setItem('rtc_lay_bigh', String(layBigH || 0));
+      localStorage.setItem('rtc_lay_mode', layMode);
+    } catch (e) {}
+  }
 
   function addVideo(track, nm, mine, pid) {
     var w = document.createElement('div');
@@ -1006,7 +1048,27 @@
     var tag = document.createElement('span');
     tag.className = 'vnm';
     tag.textContent = mine ? 'Ты · так тебя видят' : (nm || 'Участник');
+    // ИМЯ ЛЕЖИТ НА САМОМ ОКНЕ: по нему отвечаем на вопрос «а кто уже показывает».
+    if (!mine) w.dataset.nm = (nm || 'Участник');
     w.appendChild(tag);
+    // ═══ ЗАКРЕПИТЬ - ЭТО МЕСТНОЕ РЕШЕНИЕ, А НЕ КОМАНДА КОМНАТЕ ═══
+    // Кому смотреть крупно, каждый решает себе: «крупно говорящий» хорош на созвоне и
+    // мешает, когда смотришь чужой экран и слушаешь автора. Ничего не рассылаем.
+    var pin = document.createElement('button');
+    pin.className = 'vpin';
+    pin.textContent = '📌';
+    pin.title = 'Закрепить это окно крупно (только у тебя)';
+    pin.onclick = function (ev) {
+      ev.stopPropagation();
+      var key = w.dataset.pid || (w.dataset.me === '1' ? '@me' : '');
+      layPin = (layPin === key || !key) ? '' : key;
+      if (layPin && layMode === 'auto') layMode = 'spk';
+      laySave();
+      layPaint();
+      say(layPin ? 'Закрепил окно крупно - только у тебя. Снять: тот же 📌.'
+                 : 'Закрепление снял.');
+    };
+    w.appendChild(pin);
     $('screens').appendChild(w);
     vids.push({ t: track, el: w });
     layPaint();
@@ -1022,28 +1084,109 @@
     layPaint();
   }
 
+  // ═══ ПЛИТКА УБИРАЕТСЯ ПО ФАКТУ МЁРТВОЙ ДОРОЖКИ, А НЕ ПО ПРИХОДУ СОБЫТИЯ ═══
+  // Живой отзыв 29.08: камеру и показ экрана выключили, а тёмные плитки остались. Класс
+  // тот же, что был у звука радио (Б3): источник сняли, ОКНО забыли. Событие тут не
+  // опора: `LocalTrackUnpublished` приходит с `pub.track`, а к моменту его прихода SDK
+  // мог уже обнулить ссылку - тогда `dropVideo(undefined)` не находит НИЧЕГО и плитка
+  // живёт дальше. Ни ошибки, ни строки в консоли.
+  // ПОЭТОМУ ПРОВЕРЯЕМ РЕЗУЛЬТАТ (закон №35): дорожка, чей `MediaStreamTrack` перешёл в
+  // `ended`, показывать больше нечего - окно уходит независимо от того, дошло событие
+  // или нет. Уборка идемпотентна и стоит один проход по списку окон.
+  function sweepVideos() {
+    var dead = [];
+    vids.forEach(function (r) {
+      var mst = null;
+      try { mst = r.t && r.t.mediaStreamTrack; } catch (e) { mst = null; }
+      // НЕТ `mediaStreamTrack` - НЕ ПОВОД СНОСИТЬ: у части версий SDK его нет вовсе, и
+      // слепая уборка убрала бы ЖИВОЕ чужое видео. Сносим только доказанно мёртвое.
+      if (mst && mst.readyState === 'ended') dead.push(r.t);
+    });
+    dead.forEach(dropVideo);
+    return dead.length;
+  }
+
+  // ═══ МИКРОФОН: ОДНА ДВЕРЬ, И СОСТОЯНИЕ МЕНЯЕТСЯ ТОЛЬКО ПОСЛЕ УСПЕХА ═══
+  // Мест, где мы дёргаем микрофон, ТРИ: кнопка внизу, адресная просьба «приглушись» и
+  // общее «тишина». Во всех трёх стояло `micOn = false; try { ... } catch (e) {}` - то
+  // есть подпись менялась ПЕРЕД вызовом, а отказ SDK съедался МОЛЧА. Отказ там не
+  // теоретический: ровно этим путём приходит `waiting for pending publication promise
+  // timed out`, если публикация ещё идёт, - и человек видел переключившуюся кнопку над
+  // работающим микрофоном. Это тот же класс, что залипшая кнопка показа (закон №55:
+  // обратный путь обязан быть проверен), только тише - у показа хотя бы был текст.
+  // ВЕРДИКТ ПО ФАКТУ (закон №35): состояние берём у SDK после вызова, а не из намерения.
+  async function micSet(want, why) {
+    if (!room) return false;
+    try {
+      await room.localParticipant.setMicrophoneEnabled(want);
+    } catch (e) {
+      // ИСТИННОЕ СОСТОЯНИЕ СПРАШИВАЕМ У SDK, А НЕ ДОГАДЫВАЕМСЯ: у части отказов дорожка
+      // всё-таки переключается, и «вернуть как было» соврало бы во второй раз.
+      try { micOn = !!room.localParticipant.isMicrophoneEnabled; } catch (e2) {}
+      micPaint();
+      say((why ? why + ' ' : '') + 'Микрофон переключить не вышло ('
+          + (e && e.message || e) + '). Кнопка показывает то, что есть на самом деле.',
+          true);
+      return false;
+    }
+    micOn = want;
+    micPaint();
+    if (why) say(why);
+    try { upsert(room.localParticipant.identity, { muted: !micOn }); } catch (e) {}
+    return true;
+  }
+
+  function micPaint() {
+    var b = document.getElementById('mic');
+    if (!b) return;
+    b.className = micOn ? 'on' : 'off';
+    barLabel(b, micOn ? '🎙' : '🔇', 'Микрофон');
+  }
+
   function layPaint() {
     var box = $('screens');
     var n = vids.length;
     // «АВТО» - ЭТО НЕ ЧЕТВЁРТАЯ РАСКЛАДКА, А ПРАВИЛО: одно видео во всю ширину, два и
     // больше - сетка. Человек выбирает только тогда, когда правило ему не подходит.
-    var mode = (layMode === 'auto') ? (n >= 2 ? 'grid' : 'one') : layMode;
+    // ЗАКРЕПЛЁННОЕ ОКНО СИЛЬНЕЕ ПРАВИЛА «АВТО»: человек сказал, что смотреть крупно, и
+    // переспрашивать его каждый раз, когда заговорил сосед, - это спорить с ним.
+    var mode = layMode;
+    if (mode === 'auto') mode = layPin ? 'spk' : (n >= 2 ? 'grid' : 'one');
     box.className = (mode === 'grid') ? 'grid' : (mode === 'spk' ? 'spk' : '');
     if (mode === 'spk') {
-      // КРУПНО - ТОТ, КТО ГОВОРИТ. Молчат все - первый: пустое место вместо картинки
-      // читается как поломка.
+      // КРУПНО - ЗАКРЕПЛЁННЫЙ, А ЕСЛИ ЕГО НЕТ - ТОТ, КТО ГОВОРИТ. Молчат все - первый:
+      // пустое место вместо картинки читается как поломка.
       var big = null;
-      vids.forEach(function (r) {
-        var pid = r.el.dataset.pid || '';
-        if (!big && pid && people[pid] && people[pid].speaking) big = r;
-      });
+      if (layPin) {
+        vids.forEach(function (r) {
+          var k = r.el.dataset.pid || (r.el.dataset.me === '1' ? '@me' : '');
+          if (!big && k && k === layPin) big = r;
+        });
+        // ЗАКРЕПЛЁННЫЙ УШЁЛ ИЗ КОМНАТЫ - ЗАКРЕПЛЕНИЕ СНИМАЕТСЯ САМО. Держать его значило
+        // бы показывать крупно пустоту и не давать вернуться к нормальной раскладке.
+        if (!big) { layPin = ''; laySave(); }
+      }
+      if (!big) {
+        vids.forEach(function (r) {
+          var pid = r.el.dataset.pid || '';
+          if (!big && pid && people[pid] && people[pid].speaking) big = r;
+        });
+      }
       if (!big) big = vids[0];
       vids.forEach(function (r) {
         r.el.classList.toggle('big', r === big);
         r.el.classList.toggle('small', r !== big);
+        var k = r.el.dataset.pid || (r.el.dataset.me === '1' ? '@me' : '');
+        r.el.classList.toggle('pinned', !!(layPin && k === layPin));
       });
+      laySplit(box);
     } else {
-      vids.forEach(function (r) { r.el.classList.remove('big'); r.el.classList.remove('small'); });
+      vids.forEach(function (r) {
+        r.el.classList.remove('big'); r.el.classList.remove('small');
+        r.el.classList.remove('pinned');
+      });
+      var _sp = document.getElementById('vsplit');
+      if (_sp) _sp.remove();          // делить нечего - полосы нет вовсе (закон №36)
     }
     var b = $('lay');
     if (b) {
@@ -1053,6 +1196,48 @@
       b.textContent = '🔲 Раскладка: ' + LAY_NAMES[layMode];
       b.classList.toggle('on', layMode !== 'auto');
     }
+  }
+
+  // ═══ ДЕЛИТЕЛЬ МЕЖДУ ОКНАМИ: ТЯНЕШЬ - МЕНЯЕТСЯ ТОЛЬКО ТВОЙ ЭКРАН ═══
+  // Полоса живёт РОВНО в режиме «крупно»: в сетке делить нечего, и полоса там была бы
+  // кнопкой, которая ничего не делает. Высоту храним в пикселях у себя (закон о личном
+  // против общего: раскладка это вкус, а не состояние комнаты).
+  // МЫШЬ И ПАЛЕЦ - ОДИН КОД: `pointer`-события покрывают оба, а два обработчика разошлись
+  // бы на первой правке (закон №40).
+  function laySplit(box) {
+    var sp = document.getElementById('vsplit');
+    if (!sp) {
+      sp = document.createElement('div');
+      sp.id = 'vsplit';
+      sp.title = 'Потяни, чтобы изменить размер. Двойной тап - вернуть как было';
+      box.appendChild(sp);
+      var from = 0, base = 0;
+      sp.addEventListener('pointerdown', function (e) {
+        from = e.clientY;
+        var b = box.querySelector('.vwrap.big');
+        base = b ? b.getBoundingClientRect().height : 0;
+        try { sp.setPointerCapture(e.pointerId); } catch (e2) {}
+        e.preventDefault();
+      });
+      sp.addEventListener('pointermove', function (e) {
+        if (!from) return;
+        // ПОТОЛКИ НЕ УКРАШЕНИЕ: без нижнего окно схлопывается в ноль и вернуть его нечем
+        // (тянуть станет не за что), без верхнего уезжают все остальные плитки.
+        var h = Math.max(120, Math.min(window.innerHeight * 0.85, base + (e.clientY - from)));
+        layBigH = Math.round(h);
+        box.style.setProperty('--bigh', layBigH + 'px');
+      });
+      function stop() { if (from) { from = 0; laySave(); } }
+      sp.addEventListener('pointerup', stop);
+      sp.addEventListener('pointercancel', stop);
+      // ОБРАТНЫЙ ПУТЬ У РАЗМЕРА ТОЖЕ ЕСТЬ (закон №55): утянул окно не туда - двойной тап
+      // возвращает как было, и искать «сброс» в меню не нужно.
+      sp.addEventListener('dblclick', function () {
+        layBigH = 0; box.style.removeProperty('--bigh'); laySave();
+        say('Размер окна вернул к обычному.');
+      });
+    }
+    if (layBigH) box.style.setProperty('--bigh', layBigH + 'px');
   }
 
   // ═══ ВО ВЕСЬ ЭКРАН: У TELEGRAM СВОЙ API, У БРАУЗЕРА СВОЙ ═══
@@ -1772,6 +1957,9 @@
     });
     room.on(LK.RoomEvent.LocalTrackUnpublished, function (pub) {
       if (pub && pub.track) dropVideo(pub.track);
+      // СОБЫТИЕ МОЖЕТ ПРИЙТИ С УЖЕ ОБНУЛЁННОЙ ССЫЛКОЙ - тогда строка выше не находит
+      // ничего. Подметаем по факту: окно над мёртвой дорожкой не нужно никому.
+      sweepVideos();
     });
     room.on(LK.RoomEvent.TrackSubscribed, function (track, _pub, p) {
       if (track.kind === 'video') {
@@ -1826,13 +2014,36 @@
       // мержит со своими, и «мы же попросили в конструкторе» - это рассуждение, а не
       // гарантия: у аргумента приоритет выше, и он снимает вопрос целиком.
       stage('включение микрофона');
-      await room.localParticipant.setMicrophoneEnabled(true, AUDIO_WANT);
+      // ═══ ПОСЛЕ RELOAD В WEBVIEW `getUserMedia` МОЖЕТ НЕ ВЕРНУТЬСЯ ВОВСЕ ═══
+      // Факт, а не догадка: сторож загрузки назвал СТАДИЮ - «включение микрофона», при
+      // том что соединение уже `connected`, а подпись Telegram на месте (живой прогон
+      // 29.08, «Перезагрузить» в меню Telegram). У этого вызова нет своего потолка, и
+      // страница оставалась на «Подключаюсь…» НАВСЕГДА.
+      // ВХОД БЕЗ МИКРОФОНА ЛУЧШЕ, ЧЕМ НЕ ВХОД: человек попадает в комнату, слышит всех, и
+      // ему СКАЗАНО, чем это лечится. Микрофон не отменён - его включает та же кнопка,
+      // что и всегда, и включение идёт уже по жесту человека (а жест как раз и есть то,
+      // чего вебвью ждал). Молча войти немым нельзя: он будет говорить в пустоту.
+      var micGot = await Promise.race([
+        room.localParticipant.setMicrophoneEnabled(true, AUDIO_WANT)
+          .then(function () { return 'ok'; }, function (e) { return e; }),
+        new Promise(function (ok) { setTimeout(function () { ok('slow'); }, MIC_BOOT_MS); })
+      ]);
+      if (micGot !== 'ok') {
+        micOn = false;
+        var _mw = (micGot === 'slow')
+          ? ('микрофон не ответил за ' + Math.round(MIC_BOOT_MS / 1000)
+             + ' с - так бывает после перезагрузки страницы в Telegram')
+          : ('микрофон не дали (' + (micGot && micGot.message || micGot) + ')');
+        say('Ты в комнате и всех слышишь, но ' + _mw
+            + '. Нажми «🎙 Микрофон» внизу - включится по твоему касанию.', true);
+      }
     } catch (e) {
       sub('Не подключился');
       say('LiveKit: ' + (e && e.message || e), true);
       return;
     }
     connected = true;
+    micPaint();                       // подпись кнопки обязана отвечать факту, а не намерению
     // ЗАПИСЬ МОГЛА НАЧАТЬСЯ ДО НАШЕГО ВХОДА, И ЭТО ГЛАВНЫЙ СЛУЧАЙ, РАДИ КОТОРОГО
     // индикатор живёт в метаданных: вошедший позже обязан узнать о записи сразу, а не
     // остаться единственным, кто о ней не знает.
@@ -2984,10 +3195,16 @@ registerProcessor('rnn-denoise', RnnProc);
         // снова падал - и человек был заперт до перезахода (живой отказ Ren:
         // «waiting for pending publication promise timed out», кнопка залипает).
         live = false;
+        // ОКНО УХОДИТ ВМЕСТЕ С ЗАХВАТОМ, А НЕ ЖДЁТ СОБЫТИЯ ОТ SDK: `LocalTrackUnpublished`
+        // может прийти с уже обнулённым `pub.track` - тогда плитка остаётся тёмной
+        // навсегда (живой отзыв 29.08). Уборка идёт по ФАКТУ мёртвой дорожки.
+        sweepVideos();
         try {
           await sdkOff();
+          sweepVideos();
           say('');
         } catch (e) {
+          sweepVideos();
           // ГОВОРИМ РОВНО ТО, ЧТО ЗНАЕМ: у себя выключили, а снял ли публикацию сервер -
           // не знаем. Молчаливое «выключено» здесь было бы обещанием соседям, которое мы
           // не можем сдержать.
@@ -3000,6 +3217,26 @@ registerProcessor('rnn-denoise', RnnProc);
 
       async function startShow() {
         var lost = false, pub = null;
+        // ═══ ПОКАЗ УЖЕ ИДЁТ - ГОВОРИМ ЭТО, А НЕ МОЛЧИМ ═══
+        // Живой случай 29.08: человек открыл комнату с двух своих клиентов, показ пошёл с
+        // первого, а попытка со второго не дала НИЧЕГО - ни картинки, ни отказа. Что там
+        // отвечает SFU, из кода не установить (закон №48), но молчание - худший исход в
+        // любом случае: человек жмёт кнопку и не знает, сломано у него или занято.
+        // Смотрим на ФАКТ комнаты: если картинка такого рода уже идёт, называем чью.
+        if (kind === 'screen') {
+          var busy = '';
+          try {
+            vids.forEach(function (r) {
+              if (busy || r.el.dataset.me === '1') return;
+              busy = (r.el.dataset.nm || r.el.dataset.pid || 'кто-то');
+            });
+          } catch (e) {}
+          if (busy) {
+            say('Экран уже показывает ' + busy + '. Если это твой второй вход - показ идёт '
+                + 'в том окне, и с этого он не начнётся: комната пускает по одной картинке '
+                + 'от участника.', true);
+          }
+        }
         try {
           pub = (kind === 'screen')
             // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
@@ -4286,8 +4523,17 @@ registerProcessor('rnn-denoise', RnnProc);
     // ОТВЕТ ЗАБИРАЕМ ИЗ ЯЩИКА, А НЕ СЧИТАЕМ РАБОТУ СДЕЛАННОЙ ПО ФАКТУ ОТПРАВКИ (закон
     // №35): «сигнал положен» и «бот записывает» - разные утверждения, и второе бывает
     // ложным (нет ключей, никто не включил микрофон, Egress не поднят).
+    // ═══ ОКНО ОЖИДАНИЯ БЫЛО МЕНЬШЕ ОДНОГО ШАГА РАБОТЫ ═══
+    // Считаем по числам, а не по ощущению. Здесь стояло 20 попыток по 1.2 с = 24 СЕКУНДЫ,
+    // а у бота на ОДИН запрос к LiveKit заведён потолок 25 с (`rtc_record._rpc`). То есть
+    // при медленном SFU окно кончалось РАНЬШЕ, чем бот успевал сделать первый шаг, и
+    // человек читал «Бот пока не ответил» про работу, которая шла (живой случай 29.08 с
+    // распознаванием). Окно обязано быть шире худшего шага - иначе оно измеряет не бота,
+    // а само себя.
+    var WAIT_TRIES = 40;                 // 40 x 1.2 c = 48 c > 25 c одного запроса к SFU
     async function waitRec(id, hint) {
-      for (var i = 0; i < 20; i++) {
+      var last = '';
+      for (var i = 0; i < WAIT_TRIES; i++) {
         await new Promise(function (ok) { setTimeout(ok, 1200); });
         var res = null;
         try {
@@ -4295,6 +4541,7 @@ registerProcessor('rnn-denoise', RnnProc);
                                { headers: { 'X-Init-Data': initData } });
           res = await rr.json();
         } catch (e) { continue; }
+        if (res && res.state) last = res.state;
         if (!res || res.state !== 'done') continue;
         var note = (res.res && res.res.note) || '';
         if (note) say(note);
@@ -4305,7 +4552,20 @@ registerProcessor('rnn-denoise', RnnProc);
       // ЗАПИСЬ пойдёт, наверху появится красная строка» - текст от одной кнопки на всех,
       // и человек, включавший СУБТИТРЫ, читал про запись (замечание Ren 27.08). Дверь
       // одна на пять кнопок, значит и подсказку даёт та, что знает, чего ждать.
-      say('Бот пока не ответил.' + (hint ? ' ' + hint : ''));
+      // ═══ ТРИ РАЗНЫХ МОЛЧАНИЯ, И ЛЕЧАТСЯ ОНИ РАЗНЫМ ═══
+      // Ящик знает СОСТОЯНИЕ строки, и оно отвечает на первый вопрос разбора: доехало ли
+      // до бота вообще. `new` - НЕ доехало (бот не идёт в ящик, комната числится за
+      // другим ботом); `taken` - доехало и он работает дольше окна; `gone` - ответ уже
+      // забрали. Одна фраза на все три отправляла бы чинить не то.
+      if (last === 'new') {
+        say('Бот не забрал команду за минуту - похоже, он сейчас не на связи '
+            + 'или эта комната числится за другим ботом. Открой новую комнату из бота.');
+      } else if (last === 'taken') {
+        say('Бот взял команду и ещё работает - дольше, чем обычно. '
+            + (hint ? hint : 'Подожди немного и посмотри, изменилось ли состояние вверху.'));
+      } else {
+        say('Бот пока не ответил.' + (hint ? ' ' + hint : ''));
+      }
       return null;
     }
 
@@ -4436,12 +4696,8 @@ registerProcessor('rnn-denoise', RnnProc);
         if (String(m.to || '') !== room.localParticipant.identity) return;
         var _who = nameOf(p);
         if (m.do === 'quiet') {
-          micOn = false;
-          try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
-          barLabel($('mic'), '🔇', 'Микрофон');
-          $('mic').className = 'off';
-          say(_who + ' попросил тебя приглушиться - микрофон выключен. Включить можно '
-              + 'кнопкой внизу.');
+          micSet(false, _who + ' попросил тебя приглушиться - микрофон выключен. '
+                        + 'Включить можно кнопкой внизу.');
         } else if (m.do === 'bye') {
           // ВЫХОД - РЕШЕНИЕ ЧЕЛОВЕКА, А НЕ ЧУЖОЙ ТАП. Выкинуть его молча значило бы дать
           // любому участнику право отключать соседей, а такого права мы не выдавали.
@@ -4452,11 +4708,7 @@ registerProcessor('rnn-denoise', RnnProc);
         return;
       }
       if (m.t === 'hush') {
-        micOn = false;
-        try { room.localParticipant.setMicrophoneEnabled(false); } catch (e) {}
-        barLabel($('mic'), '🔇', 'Микрофон');
-        $('mic').className = 'off';
-        say('Ведущий попросил тишины - твой микрофон выключен.');
+        micSet(false, 'Ведущий попросил тишины - твой микрофон выключен.');
       }
     }
     // ДВЕРЬ ОДНА, И ПОЭТОМУ У НЕЁ ЕСТЬ ИМЯ. Свой же портфель мы показываем ТЕМ ЖЕ
@@ -4506,6 +4758,10 @@ registerProcessor('rnn-denoise', RnnProc);
   // это тот же переключатель без обратного пути (закон №55).
   $('lay').onclick = function () {
     layMode = (layMode === 'auto') ? 'grid' : (layMode === 'grid' ? 'spk' : 'auto');
+    // ВОЗВРАТ В «АВТО» - ЭТО ПОЛНЫЙ СБРОС РУЧНОГО, А НЕ ПОЛОВИНА. Оставь мы закрепление,
+    // человек выбрал бы «авто» и увидел ту же картинку - то есть кнопка соврала бы.
+    if (layMode === 'auto') { layPin = ''; layBigH = 0; $('screens').style.removeProperty('--bigh'); }
+    laySave();
     layPaint();
     say(layMode === 'auto'
         ? 'Раскладка авто: одно видео во всю ширину, два и больше - сеткой.'
@@ -4549,12 +4805,10 @@ registerProcessor('rnn-denoise', RnnProc);
   layPaint();
 
   $('mic').onclick = async function () {
+    // СОСТОЯНИЕ МЕНЯЕТ ДВЕРЬ, И ТОЛЬКО ПОСЛЕ УСПЕХА. Здесь стояло `micOn = !micOn` ПЕРЕД
+    // вызовом и `catch (e) {}` после - кнопка переключалась над работающим микрофоном.
     if (!room) return;
-    micOn = !micOn;
-    try { await room.localParticipant.setMicrophoneEnabled(micOn); } catch (e) {}
-    $('mic').className = micOn ? 'on' : 'off';
-    barLabel($('mic'), micOn ? '🎙' : '🔇', 'Микрофон');
-    upsert(room.localParticipant.identity, { muted: !micOn });
+    await micSet(!micOn, '');
   };
   $('out').onclick = async function () {
     try { if (room) await room.disconnect(); } catch (e) {}
