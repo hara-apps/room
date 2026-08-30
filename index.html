@@ -3,51 +3,132 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Голосовая комната</title>
+<title>Харма · Комнаты</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Lora:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/livekit-client@2.7.2/dist/livekit-client.umd.min.js"></script>
 <style>
-  :root { --bg:#101014; --fg:#e8e8ec; --mut:#8b8b96; --ok:#3ddc84; --bad:#ff5a5f; --card:#1b1b21; }
+  /* ═══ ХАРМА · КОМНАТЫ: ВСЯ ПАЛИТРА ТОКЕНАМИ, НИ ОДНОГО ЦВЕТА В ПРАВИЛАХ ═══
+     ПОЧЕМУ ТЁМНАЯ ИНВЕРСИЯ, А НЕ СВЕТЛЫЙ МОК: под видео светлый фон не годится - плитки
+     на нём читаются дырами, а час созвона на светлом утомляет глаза. Значит берём ТУ ЖЕ
+     лавандовую гамму, но тёмной стороной; светлая остаётся выбором человека (ниже).
+     ЗАЧЕМ ТОКЕНЫ ВООБЩЕ: до этой правки в файле жили 34 зашитых цвета мимо шести
+     переменных - и `#3a7afe` (акцент, самый частый) не был среди них ВОВСЕ. Тема,
+     собранная из литералов по местам, не переключается ни одним способом. */
+  :root {
+    --grad-a:#1c1233; --grad-b:#2e1065;      /* мягкий градиент фона, 160deg */
+    --bg:#1c1233;                            /* сплошной фон под градиентом */
+    --fg:#ffffff;                            /* основной текст */
+    --mut:#b8a8d4;                           /* второстепенный */
+    --card:rgba(255,255,255,.04);            /* плитка */
+    --line:rgba(139,92,246,.22);             /* её граница */
+    /* ═══ ЗАЛИВКА И ОБВОДКА - РАЗНЫЕ ТОКЕНЫ, И ЭТО СЧИТАЛОСЬ, А НЕ КАЗАЛОСЬ ═══
+       Фирменный #8b5cf6 хорош ЛИНИЕЙ (обводка плитки, полоса, кот): на фоне он даёт
+       3.6-4.2:1 при пороге 3:1 для нетекстовых элементов - проходит. А белым ТЕКСТОМ на
+       нём выходит 4.23:1 при пороге 4.5:1 для обычного текста - НЕ проходит, и подписи
+       кнопок у нас именно обычный текст (13-15px). Поэтому под заливку берётся тон
+       глубже: #7c3aed даёт белому 5.70:1 и остаётся тем же фиолетовым. Один токен на обе
+       роли означал бы либо блёклую линию, либо нечитаемую кнопку. */
+    --acc:#7c3aed;                           /* ЗАЛИВКА кнопки: белый на ней 5.70:1 */
+    --acc-line:#8b5cf6;                      /* ЛИНИЯ: обводка, полоса, кот */
+    --acc-h:#a78bfa;                         /* подсветка и текст: 5.6-6.5:1 на тёмном */
+    --ok:#10b981;                            /* говорит - обводкой плитки */
+    --bad:#ec4899;                           /* идёт запись - точкой и заливкой */
+    --bad-ink:#f472b6;                       /* тот же смысл ТЕКСТОМ: 5.75:1 */
+    --soft:rgba(255,255,255,.07);            /* спокойная кнопка */
+    --soft-2:rgba(255,255,255,.12);          /* выключенная */
+    --ink-on-acc:#ffffff;                    /* текст на акценте */
+    --veil:rgba(0,0,0,.55);                  /* подпись поверх видео */
+    --bar-bg:rgba(28,18,51,.92);             /* нижняя полоса */
+    --warm:#fbbf24;                          /* рука */
+    --cool:#a78bfa;                          /* таймер */
+    --shadow:rgba(0,0,0,.35);
+    --h-font:Fraunces,Georgia,"Times New Roman",serif;
+    --t-font:Lora,Georgia,"Times New Roman",serif;
+    --m-font:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  /* СВЕТЛАЯ - ТЕ ЖЕ ТОКЕНЫ, ДРУГИЕ ЗНАЧЕНИЯ. Ни одного отдельного правила: разойдись
+     они, светлая тема отставала бы от тёмной на каждой правке (закон №40). */
+  :root[data-theme="light"] {
+    --grad-a:#faf7ff; --grad-b:#f3edfa;
+    --bg:#faf7ff; --fg:#2e1065; --mut:#6b5b8a;
+    --card:rgba(46,16,101,.045); --line:rgba(139,92,246,.28);
+    --soft:rgba(46,16,101,.07); --soft-2:rgba(46,16,101,.13);
+    --veil:rgba(46,16,101,.62); --bar-bg:rgba(250,247,255,.94);
+    /* НА СВЕТЛОМ ТЕ ЖЕ РОЛИ ТРЕБУЮТ ДРУГИХ ЧИСЕЛ: #ec4899 текстом даёт здесь 3.07:1,
+       #b45309 - 4.38:1, оба ниже порога. Считано, а не подобрано на глаз. */
+    /* «ГОВОРИТ» - ОБВОДКА, И НА СВЕТЛОМ ФОНЕ ЯРКИЙ #10b981 ДАЁТ 2.21:1 при пороге 3:1
+       для нетекстовых элементов: обводку было бы просто не видно. Тот же смысл, другое
+       число - #059669 (3.28:1). Это ровно то, ради чего контраст СЧИТАЮТ, а не смотрят:
+       на тёмном фоне первый выглядел отлично и молча ломался на светлом. */
+    --ok:#059669;                            /* 3.28:1 на светлом */
+    --bad-ink:#9d174d;                       /* 6.87:1 */
+    --warm:#92400e;                          /* 6.18:1 */
+    --cool:#6d28d9;                          /* 6.19:1 */
+    --shadow:rgba(46,16,101,.12);
+  }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
-  body { margin:0; padding:16px 14px 90px; background:var(--bg); color:var(--fg);
-         font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
-  h1 { font-size:17px; margin:0 0 2px; }
+  /* ГРАДИЕНТ ЖИВЁТ НА BODY И ЗАКРЕПЛЁН: `fixed` не даёт ему прокручиваться вместе со
+     списком - иначе на длинной комнате низ экрана оказывается другого цвета, чем верх.
+     СПЛОШНОЙ `--bg` ПОД НИМ ОБЯЗАТЕЛЕН: градиент рисуется на своей области, а за её
+     пределами (резинка прокрутки на iOS) виден именно он. */
+  body { margin:0; padding:16px 14px 90px; color:var(--fg);
+         background:var(--bg);
+         background-image:linear-gradient(160deg, var(--grad-a) 0%, var(--grad-b) 100%);
+         background-attachment:fixed;
+         font:15px/1.5 var(--t-font); }
+  /* ШРИФТ - ПРОСЬБА, А НЕ УСЛОВИЕ РАБОТЫ. Google Fonts может не доехать (сеть, блокировка,
+     вебвью без доступа), и тогда страница обязана остаться читаемой: у каждого семейства
+     системный запасной в самом токене. */
+  h1 { font-size:19px; margin:0 0 2px; font-family:var(--h-font); font-weight:600;
+       letter-spacing:.2px; }
   .sub { color:var(--mut); font-size:13px; margin:0 0 14px; }
-  .card { background:var(--card); border-radius:12px; padding:10px 12px; margin:10px 0; }
+  .room { color:var(--mut); font-size:13px; margin:0 0 10px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:10px 12px; margin:10px 0; }
   .p { display:flex; align-items:center; gap:10px; padding:8px 0; }
-  .dot { width:9px; height:9px; border-radius:50%; background:#3a3a44; flex:0 0 auto; }
-  .dot.on { background:var(--ok); box-shadow:0 0 0 4px rgba(61,220,132,.18); }
+  .dot { width:9px; height:9px; border-radius:50%; background:var(--soft-2); flex:0 0 auto; }
+  .dot.on { background:var(--ok); box-shadow:0 0 0 4px rgba(16,185,129,.20); }
   .nm { flex:1; font-size:14px; }
   /* ВТОРАЯ СТРОКА ОБЯЗАНА БЫТЬ ВТОРОЙ: без `pre-line` перенос схлопнулся бы в пробел,
      и подробности слиплись бы с сутью - ровно та стена текста, которую убираем. */
   .me { color:var(--mut); font-size:12px; white-space:pre-line; }
+  /* ИМЯ КОМНАТЫ И ЦИФРЫ - МОНОШИРИННЫМ: их СЧИТЫВАЮТ и переносят, а не читают. */
+  code, .mono { font-family:var(--m-font); font-size:.92em; }
   /* НИЖНЯЯ ПОЛОСА - ЭТО ТО, ЧЕМ ПОЛЬЗУЮТСЯ В КАЖДОМ СОЗВОНЕ, и её кнопок стало шесть.
      Подписи ужимаются до иконки на узком экране: «🎙 Микрофон» в 320 px рядом с пятью
      соседями превращается в многоточие, а иконка читается всегда. */
   #bar { position:fixed; left:0; right:0; bottom:0; padding:10px 10px calc(10px + env(safe-area-inset-bottom));
-         background:#16161c; display:flex; gap:6px; }
+         background:var(--bar-bg); backdrop-filter:blur(10px); display:flex; gap:6px; }
   button { flex:1; padding:14px; font-size:15px; font-weight:600; border:0; border-radius:12px;
-           background:#3a7afe; color:#fff; }
+           background:var(--acc); color:var(--ink-on-acc); }
   /* НЕЙТРАЛЬНАЯ ПО УМОЛЧАНИЮ, СИНЯЯ - КОГДА ВКЛЮЧЕНА. Шесть одинаково ярких кнопок
      читаются как экран, где всё одинаково важно, то есть где ничего не важно. */
   #bar button { padding:12px 6px; font-size:13px; overflow:hidden; white-space:nowrap;
-                text-overflow:clip; background:#25252e; }
-  #bar button.on { background:#3a7afe; }
+                text-overflow:clip; background:var(--soft); color:var(--fg); }
+  #bar button.on { background:var(--acc); color:var(--ink-on-acc); }
   @media (max-width: 420px) { #bar button .lbl { display:none; } }
-  button.off { background:#3a3a44; }
-  button.leave { background:#4a2226; color:#ff9aa0; flex:0 0 22%; }
+  button.off { background:var(--soft-2); color:var(--fg); }
+  button.leave { background:rgba(236,72,153,.18); color:var(--bad-ink); flex:0 0 22%; }
   button:active { opacity:.85; }
   #state { font-size:13px; color:var(--mut); margin:8px 0 0; }
-  button.wide { width:100%; margin:6px 0; background:#25252e; font-weight:500; font-size:14px; }
-  button.wide.on { background:#3a7afe; }
+  button.wide { width:100%; margin:6px 0; background:var(--soft); color:var(--fg);
+                font-weight:500; font-size:14px; }
+  button.wide.on { background:var(--acc); color:var(--ink-on-acc); }
   /* РАСКЛАДКИ ВИДЕО. «Авто» - одно видео во всю ширину, два и больше - сетка; «крупно» -
      говорящий большой, остальные лентой снизу. Как в Zoom и Meet устроено ЭТО, а не их
      пиксели: человек выбирает, на что смотреть, а не мирится с тем, что выбрали за него. */
   #screens { display:flex; flex-direction:column; }
   #screens .vwrap { position:relative; margin:8px 0; }
   #screens video { width:100%; display:block; border-radius:10px; background:#000; }
+  /* ПЛИТКА В ЛАВАНДОВОЙ ГРАНИЦЕ, ГОВОРЯЩИЙ - ОБВОДКОЙ. Кто говорит, видно ПЕРИМЕТРОМ,
+     а не подписью: взгляд ловит его боковым зрением, не читая. */
+  #screens .vwrap { border-radius:12px; outline:1px solid var(--line); outline-offset:-1px; }
+  #screens .vwrap.speaking { outline:2px solid var(--ok); }
   #screens .vnm { position:absolute; left:6px; bottom:6px; padding:2px 8px; font-size:12px;
-                  border-radius:999px; background:rgba(0,0,0,.55); color:#fff; }
+                  border-radius:999px; background:var(--veil); color:#fff; }
   #screens.grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
   #screens.grid .vwrap { margin:0; }
   #screens.spk { display:flex; flex-direction:column; }
@@ -59,54 +140,56 @@
      подстраивает СВОЙ экран и никого не двигает. Полоса широкая нарочно - пальцем в
      четыре пикселя не попасть. */
   #vsplit { order:1; height:16px; margin:2px 0; cursor:row-resize; border-radius:8px;
-            background:rgba(255,255,255,.10); position:relative; touch-action:none; }
+            background:var(--soft); position:relative; touch-action:none; }
   #vsplit::after { content:''; position:absolute; left:50%; top:50%; width:44px; height:4px;
-                   margin:-2px 0 0 -22px; border-radius:2px; background:rgba(255,255,255,.45); }
+                   margin:-2px 0 0 -22px; border-radius:2px; background:var(--acc-h); }
   #screens .vpin { position:absolute; right:6px; top:6px; padding:2px 7px; font-size:12px;
                    line-height:18px; border-radius:8px; border:0; cursor:pointer;
-                   background:rgba(0,0,0,.55); color:#fff; }
-  #screens .vwrap.pinned .vpin { background:rgba(255,255,255,.85); color:#000; }
-  .hand { color:#ffd166; font-size:12px; }
+                   background:var(--veil); color:#fff; }
+  #screens .vwrap.pinned .vpin { background:var(--acc); color:var(--ink-on-acc); }
+  .hand { color:var(--warm); font-size:12px; }
   .err { color:var(--bad); }
   /* ИНДИКАТОР ЗАПИСИ ВИДЕН БЕЗ ПОИСКА ГЛАЗАМИ: он про то, что разговор сохраняется, и
      прятать его среди служебных строк нельзя. Мигание - чтобы он не читался как ярлык. */
-  .rec { margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#3a1d20;
-         color:#ff9aa0; font-size:13px; font-weight:600; }
+  .rec { margin:0 0 12px; padding:8px 10px; border-radius:10px;
+         background:rgba(236,72,153,.16); border:1px solid rgba(236,72,153,.35);
+         color:var(--bad-ink); font-size:13px; font-weight:600; }
   .rec::before { content:'⏺ '; animation:blink 1.6s infinite; }
   @keyframes blink { 50% { opacity:.25; } }
   /* ФИЛЬТРЫ КАТАЛОГА ЖИВУТ ВНУТРИ СВОЕЙ КАРТОЧКИ, А НЕ ОТДЕЛЬНЫМ БЛОКОМ (закон №37):
      ряд чипов, стоящий сам по себе, на первой же прокрутке уезжает под соседа, и от
      кнопок остаётся нижняя половина. */
   .chip { flex:0 0 auto; width:auto; padding:8px 12px; margin:0 6px 6px 0; font-size:13px;
-          font-weight:500; background:#25252e; border-radius:999px; }
-  .chip.on { background:#3a7afe; }
+          font-weight:500; background:var(--soft); color:var(--fg); border-radius:999px; }
+  .chip.on { background:var(--acc); color:var(--ink-on-acc); }
   #rchips { display:flex; flex-wrap:wrap; }
   #rlist { max-height:46vh; overflow-y:auto; }
   button.station { display:flex; align-items:center; gap:10px; text-align:left; }
   button.station img { width:26px; height:26px; border-radius:6px; object-fit:cover;
-                       flex:0 0 auto; background:#16161c; }
+                       flex:0 0 auto; background:var(--soft); }
   /* ТАЙМЕР СТОИТ ТАМ ЖЕ, ГДЕ ИНДИКАТОР ЗАПИСИ, И ПО ТОЙ ЖЕ ПРИЧИНЕ: это состояние ВСЕЙ
      комнаты, а не кнопка одного человека. Цвет другой - запись и таймер не должны
      читаться как одно и то же событие. */
-  .tmr { margin:0 0 12px; padding:8px 10px; border-radius:10px; background:#1d2a3a;
-         color:#9ec5ff; font-size:13px; font-weight:600; }
-  .tmr.fin { background:#3a1d20; color:#ff9aa0; }
+  .tmr { margin:0 0 12px; padding:8px 10px; border-radius:10px;
+         background:rgba(139,92,246,.14); border:1px solid var(--line);
+         color:var(--cool); font-size:13px; font-weight:600; }
+  .tmr.fin { background:rgba(236,72,153,.16); color:var(--bad-ink); }
   /* РЕАКЦИИ - ОДИН РЯД КРУГЛЫХ КНОПОК, А НЕ СТОЛБИК НА ВСЮ ШИРИНУ: тап по ним идёт
      посреди разговора, и семь широких кнопок отодвинули бы список людей за экран. */
   #emos, #snds, #tmrset { display:flex; flex-wrap:wrap; }
   button.emo { flex:0 0 auto; width:auto; padding:7px 11px; margin:0 6px 6px 0;
-               font-size:19px; line-height:1; background:#25252e; border-radius:999px; }
+               font-size:19px; line-height:1; background:var(--soft); color:var(--fg); border-radius:999px; }
   button.snd { flex:0 0 auto; width:auto; padding:7px 11px; margin:0 6px 6px 0;
-               font-size:13px; font-weight:500; background:#25252e; border-radius:999px; }
+               font-size:13px; font-weight:500; background:var(--soft); color:var(--fg); border-radius:999px; }
   button.pre { flex:0 0 auto; width:auto; padding:8px 12px; margin:0 6px 6px 0;
-               font-size:13px; font-weight:500; background:#25252e; border-radius:999px; }
+               font-size:13px; font-weight:500; background:var(--soft); color:var(--fg); border-radius:999px; }
   /* ВСПЛЫВАЮЩИЕ РЕАКЦИИ ЖИВУТ НАД НИЖНЕЙ ПОЛОСОЙ И НЕ ЛОВЯТ ТАПЫ (`pointer-events:none`):
      иначе чужая реакция, пролетающая над кнопкой микрофона, съедала бы нажатие. */
   /* ГРАФИК И ХОЛСТ ЖИВУТ В ОДНОЙ КОРОБКЕ, И ЭТО НЕ ОФОРМЛЕНИЕ: холст рисуется ПОВЕРХ
      графика, значит его координаты обязаны считаться от ЭТОЙ коробки, а не от экрана.
      `position:relative` тут - несущая конструкция. */
   #chartbox { position:relative; width:100%; height:56vw; max-height:340px; min-height:190px;
-              border-radius:10px; overflow:hidden; background:#0d0d12; }
+              border-radius:10px; overflow:hidden; background:rgba(0,0,0,.25); }
   #chartbox iframe { width:100%; height:100%; border:0; display:block; }
   /* ХОЛСТ ЛОВИТ ТАПЫ ТОЛЬКО КОГДА РИСУЮТ. Иначе он накрыл бы график целиком, и
      прокрутить или увеличить свечи стало бы нельзя - мы бы сломали то, поверх чего
@@ -135,7 +218,7 @@
      поле уже своё и выглядит как выглядит, а перекрасить чужой экран заодно с новым -
      это правка, о которой никто не просил. */
   input.tin { width:100%; padding:11px 12px; font-size:14px; border:0; border-radius:10px;
-              background:#25252e; color:var(--fg); margin:4px 0 6px; }
+              background:var(--soft); color:var(--fg); margin:4px 0 6px; }
   input.tin::placeholder { color:var(--mut); }
   /* ОЧЕРЕДЬ ВОПРОСОВ. Номер слева - это ПОРЯДОК, в котором до них дойдут, поэтому он
      считается по голосам, а не по времени прихода. */
@@ -145,7 +228,7 @@
              line-height:1; background:transparent; color:var(--mut); font-weight:700; }
   .pact { padding:2px 0 8px 19px; }
   .pact button { width:auto; padding:6px 10px; margin:0 6px 6px 0; font-size:12px;
-                 font-weight:500; background:#25252e; border-radius:999px; }
+                 font-weight:500; background:var(--soft); color:var(--fg); border-radius:999px; }
   .pact .me { margin:2px 0 0; }
   #amalist { max-height:38vh; overflow-y:auto; }
   .q { display:flex; align-items:flex-start; gap:8px; padding:7px 0; }
@@ -154,25 +237,77 @@
   .q .qw { color:var(--mut); font-size:12px; }
   .q.done .qt { color:var(--mut); text-decoration:line-through; }
   .q button { flex:0 0 auto; width:auto; padding:5px 9px; margin:0; font-size:12px;
-              font-weight:600; background:#25252e; border-radius:999px; }
-  .q button.on { background:#3a7afe; }
+              font-weight:600; background:var(--soft); color:var(--fg); border-radius:999px; }
+  .q button.on { background:var(--acc); color:var(--ink-on-acc); }
   /* ГОЛОСОВАНИЕ: РЯД КНОПОК И РЯД ПОЛОС. Полоса отвечает на вопрос «кого больше» быстрее
      любого числа, но число рядом обязано быть - «примерно поровну» решения не принимает. */
   #pollbtns { display:flex; flex-wrap:wrap; }
-  .bar { height:8px; border-radius:999px; background:#3a7afe; min-width:2px; margin:3px 0 6px; }
-  .bar.n { background:#ff5a5f; }
-  .bar.a { background:#3a3a44; }
+  .bar { height:8px; border-radius:999px; background:var(--acc-line); min-width:2px; margin:3px 0 6px; }
+  .bar.n { background:var(--bad); }
+  .bar.a { background:var(--soft-2); }
   #pops { position:fixed; left:0; right:0; bottom:78px; padding:0 14px; display:flex;
           flex-direction:column; align-items:center; gap:4px; pointer-events:none; z-index:5; }
-  .pop { background:rgba(30,30,38,.94); border-radius:999px; padding:5px 12px; font-size:14px;
+  .pop { background:var(--bar-bg); border:1px solid var(--line); border-radius:999px; padding:5px 12px; font-size:14px;
          max-width:92%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
          animation:rise 2.6s ease-out forwards; }
   @keyframes rise { 0% { opacity:0; transform:translateY(8px); } 12% { opacity:1; transform:none; }
                     75% { opacity:1; } 100% { opacity:0; transform:translateY(-10px); } }
+  /* ═══ КОТ В УГЛУ: МАЛЕНЬКИЙ, СПОКОЙНЫЙ, ВЫКЛЮЧАЕМЫЙ ═══
+     Он живёт НАД шапкой справа и не мешает ничему: полоса кнопок внизу, карточки слева.
+     Мигает он РЕДКО - анимация, дёргающаяся каждую секунду, на часовом созвоне
+     превращается в раздражитель, а не в характер. */
+  #cat { position:absolute; top:8px; right:10px; pointer-events:none; z-index:2;
+         opacity:.92; transition:opacity .3s; }
+  #cat.off { display:none; }
+  .c-head { fill:var(--acc-line); }
+  .c-ear { fill:var(--acc-h); }
+  .c-eye { fill:var(--bg); animation:blink 7s infinite; }
+  .c-nose { fill:var(--bg); }
+  .c-wh { stroke:var(--acc-h); stroke-width:1.2; stroke-linecap:round; opacity:.7; }
+  .c-tail { stroke:var(--acc-line); stroke-width:4; stroke-linecap:round; fill:none;
+            transform-origin:52px 44px; animation:tail 4s ease-in-out infinite; }
+  @keyframes blink { 0%,94%,100% { transform:scaleY(1); } 96% { transform:scaleY(.1); } }
+  .c-eyes { transform-origin:center 32px; }
+  @keyframes tail { 0%,100% { transform:rotate(0deg); } 50% { transform:rotate(-14deg); } }
+  /* СОБЫТИЯ КОМНАТЫ: КОТ ОТВЕЧАЕТ КОРОТКИМ ДВИЖЕНИЕМ И ВОЗВРАЩАЕТСЯ. Класс снимается
+     по `animationend`, поэтому «застрять» в подпрыгнувшем состоянии он не может. */
+  #cat.hop .c-body { animation:hop .6s ease-out; }
+  @keyframes hop { 0%,100% { transform:translateY(0); } 35% { transform:translateY(-7px); } }
+  #cat.purr .c-body { animation:purr .8s ease-in-out; }
+  @keyframes purr { 0%,100% { transform:rotate(0deg); } 30% { transform:rotate(-6deg); }
+                    65% { transform:rotate(5deg); } }
+  /* ТИШИНА: кот дремлет - глаза щёлочками. Это НЕ анимация, а состояние: дремать он может
+     минутами, и мигающая картинка всё это время была бы шумом. */
+  #cat.nap .c-eyes { transform:scaleY(.12); }
+  #cat.nap .c-eye { animation:none; }
 </style>
 </head>
 <body>
-<h1 id="title">Голосовая комната</h1>
+<!-- ═══ КОТ: СВОЙ SVG, БЕЗ КАРТИНОК И БИБЛИОТЕК ═══
+     Внешняя картинка это ещё один запрос, который может не доехать (сеть, блокировка,
+     кэш вебвью), и тогда в углу висит битая иконка - хуже, чем ничего. SVG едет вместе
+     со страницей и рисуется всегда. Анимации - CSS: они не занимают ни главный поток,
+     ни звуковой, а на созвоне это не мелочь.
+     `aria-hidden` и `pointer-events:none` НАРОЧНО: это украшение, оно не должно ни
+     перехватывать тапы по кнопкам под ним, ни читаться скринридером как содержимое. -->
+<div id="cat" aria-hidden="true">
+  <svg viewBox="0 0 64 64" width="52" height="52">
+    <g class="c-body">
+      <path class="c-ear" d="M14 26 L18 12 L28 20 Z"/>
+      <path class="c-ear" d="M50 26 L46 12 L36 20 Z"/>
+      <ellipse class="c-head" cx="32" cy="34" rx="20" ry="17"/>
+      <g class="c-eyes">
+        <ellipse class="c-eye" cx="25" cy="32" rx="2.6" ry="3.4"/>
+        <ellipse class="c-eye" cx="39" cy="32" rx="2.6" ry="3.4"/>
+      </g>
+      <path class="c-nose" d="M31 39 h2 l-1 1.6 Z"/>
+      <path class="c-wh" d="M12 36 h8 M12 40 h8 M52 36 h-8 M52 40 h-8"/>
+      <path class="c-tail" d="M52 44 q8 2 6 10"/>
+    </g>
+  </svg>
+</div>
+<h1 id="title">Харма · Комнаты</h1>
+<p class="room" id="roomline"></p>
 <p class="sub" id="sub">Подключаюсь…</p>
 <p id="recbar" class="rec" style="display:none"></p>
 <p id="tmrbar" class="tmr" style="display:none"></p>
@@ -255,6 +390,10 @@
        происходит в комнате. Полноэкранная кнопка появляется только там, где клиент это
        умеет: у Telegram это Bot API 8.0, а на старом клиенте её быть не должно вовсе. -->
   <button id="lay" class="wide">🔲 Раскладка: авто</button>
+  <!-- ═══ ВИД: ТЕМА И КОТ. ОБА ЛИЧНЫЕ И ОБА С ОБРАТНЫМ ПУТЁМ (закон №55) ═══
+       В комнату не едет ни байт: сосед моей темы не видит и видеть не должен. -->
+  <button id="theme" class="wide">🌙 Тема: тёмная</button>
+  <button id="catbtn" class="wide">🐱 Кот: на месте</button>
   <button id="full" class="wide" style="display:none">⛶ Во весь экран</button>
   <button id="tmr" class="wide">⏱ Таймер</button>
   <button id="chart" class="wide">📈 График и доска</button>
@@ -356,7 +495,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'ab978200efc0';
+  var VERSION = '569ca1578e09';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -400,7 +539,13 @@
         + 'кнопкой из бота или по свежему приглашению.', true);
     return;
   }
-  $('title').textContent = 'Комната: ' + ROOM;
+  // ═══ ИМЯ ПРОДУКТА - В ЗАГОЛОВКЕ, ИМЯ КОМНАТЫ - ОТДЕЛЬНОЙ СТРОКОЙ ═══
+  // Заголовок отвечает на вопрос «куда я попал», строка под ним - «в какую именно».
+  // Раньше он менялся на «Комната: r-b5c661», и продукт исчезал с экрана вовсе: человек,
+  // пришедший по ссылке из чужого чата, не узнавал даже, чем он пользуется.
+  // ИМЯ КОМНАТЫ МОНОШИРИННЫМ: его переносят в чат и сверяют посимвольно.
+  $('roomline').innerHTML = 'Комната: <span class="mono"></span>';
+  $('roomline').querySelector('.mono').textContent = ROOM;
 
   if (!window.LivekitClient) {
     sub('Не загрузился клиент');
@@ -1185,9 +1330,21 @@
         r.el.classList.remove('big'); r.el.classList.remove('small');
         r.el.classList.remove('pinned');
       });
+      // ДЕЛИТЬ НЕЧЕГО - ПОЛОСЫ НЕТ ВОВСЕ (закон №36). Она живёт РОВНО в режиме «крупно»:
+      // в сетке тянуть не за что, и оставленная полоса читалась бы как сломанная кнопка.
+      // УБОРКА СТОИТ ИМЕННО ЗДЕСЬ, В ВЕТКЕ «не крупно»: вынеси её наружу - и она сносила
+      // бы полосу СРАЗУ ПОСЛЕ того, как ветка «крупно» её создала (поймано пробой:
+      // «делителя между окнами нет» при верном на вид коде).
       var _sp = document.getElementById('vsplit');
-      if (_sp) _sp.remove();          // делить нечего - полосы нет вовсе (закон №36)
+      if (_sp) _sp.remove();
     }
+    // ГОВОРЯЩИЙ - ОБВОДКОЙ ПЛИТКИ, И ЭТО ОДНО МЕСТО НА ВСЕ РАСКЛАДКИ. Раскладка отвечает
+    // на вопрос «где окна», подсветка - «кто сейчас говорит»; свяжи их, и в сетке
+    // говорящий перестал бы подсвечиваться вовсе.
+    vids.forEach(function (r) {
+      var pid = r.el.dataset.pid || '';
+      r.el.classList.toggle('speaking', !!(pid && people[pid] && people[pid].speaking));
+    });
     var b = $('lay');
     if (b) {
       // РАСКЛАДЫВАТЬ НЕЧЕГО - КНОПКИ НЕТ. Она бы переключала невидимое и читалась как
@@ -1916,6 +2073,9 @@
     // зависела от порядка строк, а не от состояния.
     room.on(LK.RoomEvent.ParticipantConnected, function (p) {
       upsert(p.identity, { name: human(p.name, p.identity) });
+      // КОТ ЗАМЕЧАЕТ ВОШЕДШЕГО. Ничего не сообщает сверх того, что и так видно в списке,
+      // - это характер, а не индикатор, и потому его можно выключить.
+      try { if (window.catDo) window.catDo('hop'); } catch (e) {}
       // ПРИШЁЛ ЧЕЛОВЕК - МЕРЯЕМ ЕГО СВЯЗЬ, НЕ ДОЖИДАЯСЬ ОКНА: именно в этот момент
       // спрашивают «а его хорошо слышно?», и ответ через десять секунд опаздывает.
       setTimeout(statTick, 1200);
@@ -1986,6 +2146,9 @@
       var now = {};
       spk.forEach(function (p) { now[p.identity] = true; });
       Object.keys(people).forEach(function (id) { people[id].speaking = !!now[id]; });
+      // ЗАГОВОРИЛИ - КОТ ПРОСЫПАЕТСЯ. Дремота это признак ТИШИНЫ, и держать её при живом
+      // разговоре значило бы врать картинкой.
+      if (spk && spk.length) { try { if (window.catAwake) window.catAwake(); } catch (e) {} }
       draw();
       // «КРУПНО» СЛЕДУЕТ ЗА ГОВОРЯЩИМ, ИНАЧЕ ЭТО ПРОСТО «БОЛЬШИМ ПЕРВЫЙ ВОШЕДШИЙ».
       layPaint();
@@ -4585,6 +4748,7 @@ registerProcessor('rnn-denoise', RnnProc);
       // от молчуна не появится ни всплывашки, ни гонга, что бы он ни прислал.
       if ((m.t === 'react' || m.t === 'snd') && p && funOff[String(p.identity)]) return;
       if (m.t === 'react' && p && floodOk(p.identity)) {
+        try { if (window.catDo) window.catDo('purr'); } catch (e) {}
         // ЭМОДЗИ РЕЖЕМ ПО ДЛИНЕ: в поле приходит строка от клиента, и «реакцией» на
         // килобайт текста можно было бы закрыть соседу пол-экрана.
         popup(nameOf(p) + '  ' + String(m.e || '').slice(0, 8));
@@ -4756,6 +4920,75 @@ registerProcessor('rnn-denoise', RnnProc);
   // Три состояния, а не два, поэтому обратный путь тут - вернуться в исходное, а не
   // «выключить». Круг обязан замыкаться: раскладка, из которой нельзя вернуться в авто,
   // это тот же переключатель без обратного пути (закон №55).
+  // ═══ ТЕМА: ЛИЧНАЯ, ПОМНИТСЯ, И ОБА НАПРАВЛЕНИЯ РАВНОПРАВНЫ (закон №55) ═══
+  // ТЁМНАЯ ПО УМОЛЧАНИЮ - ЭТО РЕШЕНИЕ, А НЕ ВКУС: под видео светлый фон даёт плитки-дыры,
+  // и час созвона на нём утомляет. Светлая остаётся ВЫБОРОМ, и он переживает заход:
+  // человек, выбравший её однажды, не должен выбирать её каждый раз заново.
+  // ЗНАЧЕНИЕ СТОИТ НА КОРНЕ, А НЕ НА BODY: токены объявлены в `:root`, и переопределять
+  // их надо там же - иначе пришлось бы дублировать весь блок под вторым селектором.
+  var theme = 'dark';
+  try { theme = localStorage.getItem('rtc_theme') || 'dark'; } catch (e) {}
+
+  function themePaint() {
+    if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    else document.documentElement.removeAttribute('data-theme');
+    var b = document.getElementById('theme');
+    if (b) {
+      b.textContent = theme === 'light' ? '☀️ Тема: светлая' : '🌙 Тема: тёмная';
+      b.classList.toggle('on', theme === 'light');
+    }
+  }
+  themePaint();
+  $('theme').onclick = function () {
+    theme = (theme === 'light') ? 'dark' : 'light';
+    try { localStorage.setItem('rtc_theme', theme); } catch (e) {}
+    themePaint();
+  };
+
+  // ═══ КОТ: УКРАШЕНИЕ, И ЕГО МОЖНО УБРАТЬ ═══
+  // Он ничего не сообщает - значит обязан выключаться, и выключенным оставаться. Тот же
+  // обратный путь, что у темы: тап туда, тап обратно, выбор помнится.
+  var catOn = true;
+  try { catOn = (localStorage.getItem('rtc_cat') || '1') === '1'; } catch (e) {}
+
+  function catPaint() {
+    var c = document.getElementById('cat');
+    if (c) c.classList.toggle('off', !catOn);
+    var b = document.getElementById('catbtn');
+    if (b) {
+      b.textContent = catOn ? '🐱 Кот: на месте' : '🐱 Кот: убран';
+      b.classList.toggle('on', catOn);
+    }
+  }
+  catPaint();
+  $('catbtn').onclick = function () {
+    catOn = !catOn;
+    try { localStorage.setItem('rtc_cat', catOn ? '1' : '0'); } catch (e) {}
+    catPaint();
+  };
+
+  // КОТ РЕАГИРУЕТ НА СОБЫТИЯ, А НЕ ЖИВЁТ САМ ПО СЕБЕ. Класс снимается по `animationend`,
+  // поэтому застрять в подпрыгнувшем виде он не может даже при потерянном событии -
+  // страховка таймером стоит рядом.
+  function catDo(kind) {
+    var c = document.getElementById('cat');
+    if (!c || !catOn) return;
+    c.classList.remove('nap');
+    c.classList.add(kind);
+    setTimeout(function () { c.classList.remove(kind); }, 900);
+  }
+  window.catDo = catDo;
+  // ТИШИНА - СОСТОЯНИЕ, А НЕ СОБЫТИЕ: дремлет он, пока в комнате молчат, и просыпается от
+  // первого же движения. Проверяем раз в 15 секунд: чаще незачем, реже - заметно.
+  var catQuiet = Date.now();
+  window.catAwake = function () { catQuiet = Date.now();
+    var c = document.getElementById('cat'); if (c) c.classList.remove('nap'); };
+  setInterval(function () {
+    var c = document.getElementById('cat');
+    if (!c || !catOn) return;
+    c.classList.toggle('nap', Date.now() - catQuiet > 60000);
+  }, 15000);
+
   $('lay').onclick = function () {
     layMode = (layMode === 'auto') ? 'grid' : (layMode === 'grid' ? 'spk' : 'auto');
     // ВОЗВРАТ В «АВТО» - ЭТО ПОЛНЫЙ СБРОС РУЧНОГО, А НЕ ПОЛОВИНА. Оставь мы закрепление,
