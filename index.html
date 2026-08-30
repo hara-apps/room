@@ -151,7 +151,15 @@
   #screens.grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
   #screens.grid .vwrap { margin:0; }
   #screens.spk { display:flex; flex-direction:column; }
-  #screens.spk .vwrap.big { order:0; height:var(--bigh, 46vh); }
+  #screens.spk .vwrap.big { order:0; height:var(--bigh, 46vh);
+                            width:var(--bigw, 100%); margin-left:auto; margin-right:auto; }
+  /* УГОЛОК ТЯНЕТ ОБА РАЗМЕРА СРАЗУ - как окно в системе. Полоса под окном умела только
+     высоту, и «свободный размер» им был невыразим. */
+  #vgrip { position:absolute; right:2px; bottom:2px; width:22px; height:22px;
+           cursor:nwse-resize; border-radius:6px; touch-action:none; z-index:3;
+           background:linear-gradient(135deg, transparent 42%, var(--line) 42%,
+                      var(--line) 58%, transparent 58%);
+           opacity:.85; }
   #screens.spk .vwrap.big video { height:100%; object-fit:contain; }
   #screens.spk .vwrap.small { order:2; width:34%; display:inline-block; }
   #screens.spk .strip { order:2; display:flex; gap:6px; overflow-x:auto; }
@@ -322,6 +330,14 @@
 <h1 id="title">Харма · Комнаты</h1>
 <p class="room" id="roomline"></p>
 <p class="sub" id="sub">Подключаюсь…</p>
+<!-- ЗВУК ЗАБЛОКИРОВАН БРАУЗЕРОМ: полоса стоит ПЕРВОЙ и во всю ширину. Человек, который
+     никого не слышит, не должен её искать - он в этот момент уверен, что сломан созвон,
+     а не что нужен один тап. Живой блокер (Ren 30.08): A слышит B, B не слышит A, после
+     перезахода меняются местами - это ровно «кому повезло тапнуть до прихода дорожки». -->
+<div id="soundbar" style="display:none">
+  <button id="sound" class="wide">🔊 Включить звук</button>
+  <p class="me" id="soundwhy"></p>
+</div>
 <p id="recbar" class="rec" style="display:none"></p>
 <p id="tmrbar" class="tmr" style="display:none"></p>
 <div class="card" id="people"></div>
@@ -517,7 +533,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '0ff5cc873c83';
+  var VERSION = '8d3ee7954c44';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -746,7 +762,13 @@
   //: сторож резал бы живое окно и не давал дойти точному отказу. Две копии числа
   //: разошлись бы на первой правке, и одна дверь молча осталась бы без сторожа - ровно
   //: это и случилось с микрофоном (см. `micSet`).
-  var PUB_WAIT_MS = 25000;
+  //: ЧИСЛО - РУЧКА, А НЕ ЛОГИКА, И ПОЭТОМУ У НЕГО ЕСТЬ ШОВ ДЛЯ ПРОБЫ. Браузерный прогон
+  //: обязан пройти ОБА зависания (камера -> экран и камера -> выкл -> вкл), а ждать по 25
+  //: секунд на каждом значит либо не проверять их вовсе, либо растянуть пробу до
+  //: неюзабельности - и первое как раз и случилось. Подменяется КОНСТАНТА, а гонка,
+  //: разматывание и возврат кнопки исполняются боевые (закон №56: подменять можно провод,
+  //: но не проверяемую логику).
+  var PUB_WAIT_MS = (window.__PUBWAIT | 0) || 25000;
   var room = null, people = {}, micOn = true, recOn = false, djOn = false,
       subOn = false;
   //: ═══ ШУМОДАВ: СОСТОЯНИЕ ЖИВЁТ СНАРУЖИ КОМНАТЫ, И ЭТО НЕ ВКУСОВЩИНА ═══
@@ -859,6 +881,64 @@
   //: «у ЧАСТИ участников»: это не везение, а гонка порядка событий.
   //: ПОЭТОМУ ПОМНИМ ВСЕ ДОРОЖКИ ДИДЖЕЯ, а не последнюю.
   var djSids = {};                      // sid -> 1, пока звук диджея у нас на странице
+
+  //: ═══ БРАУЗЕР МОЖЕТ НЕ ДАТЬ ИГРАТЬ ЗВУК, И ДЕЛАЕТ ЭТО МОЛЧА ═══
+  //: ЖИВОЙ БЛОКЕР (Ren 30.08, три участника): A слышит B, B не слышит A, после перезахода
+  //: меняются местами. Логи LiveKit при этом чистые - ВСЕ опубликовали аудио, гранты
+  //: полные, ICE встал. Значит ломалась не публикация, а ВОСПРОИЗВЕДЕНИЕ у слушателя.
+  //: МЕХАНИЗМ: `track.attach()` создаёт `<audio autoplay>`, и без жеста человека браузер
+  //: отклоняет `play()` - без исключения, без события, без единой строки. У LiveKit для
+  //: этого есть свой контракт (`room.canPlaybackAudio`, `room.startAudio()`, событие
+  //: `AudioPlaybackStatusChanged`), и мы не использовали из него НИЧЕГО: ноль вхождений
+  //: на всю страницу. Отсюда и «меняется местами»: кто успел тапнуть ДО прихода первой
+  //: удалённой дорожки, тот слышит, остальные нет, а порядок каждый раз новый.
+  //: ПОЧЕМУ ЭТО НЕ ЛЕЧИТСЯ «ПОЗВАТЬ startAudio() ПРИ ВХОДЕ»: он обязан идти ИЗ ЖЕСТА,
+  //: иначе браузер отклонит и его. Значит нужна ВИДИМАЯ кнопка, и она обязана называть
+  //: причину: молчащий созвон человек читает как поломку продукта, а не как один тап.
+  var SOUND_OK = true;
+
+  function soundPaint(why) {
+    var bar = document.getElementById('soundbar');
+    if (!bar) return;
+    bar.style.display = SOUND_OK ? 'none' : '';
+    var w = document.getElementById('soundwhy');
+    if (w) {
+      w.textContent = SOUND_OK ? ''
+        : (why || 'Браузер не разрешил проигрывать звук без твоего касания - поэтому '
+                + 'остальных не слышно. Один тап, и звук пойдёт.');
+    }
+  }
+
+  //: ФАКТ, А НЕ НАМЕРЕНИЕ (закон №35): после `startAudio()` ПЕРЕСПРАШИВАЕМ у комнаты.
+  //: «Мы позвали» и «звук пошёл» - разные утверждения, и человеку нужно второе.
+  async function soundStart() {
+    if (!room) return false;
+    try {
+      if (typeof room.startAudio === 'function') await room.startAudio();
+    } catch (e) {
+      soundPaint('Браузер отказал: ' + String((e && e.message) || e).slice(0, 90)
+                 + '. Попробуй ещё раз - тап должен быть по самой кнопке.');
+      return false;
+    }
+    SOUND_OK = (room.canPlaybackAudio !== false);
+    soundPaint();
+    if (SOUND_OK) say('');
+    return SOUND_OK;
+  }
+
+  //: СОСТОЯНИЕ СПРАШИВАЕТСЯ У КОМНАТЫ, А НЕ ВЫВОДИТСЯ ИЗ НАШИХ ДОГАДОК. Поле может
+  //: отсутствовать (старый SDK) - тогда считаем, что звук идёт: пугать полосой там, где
+  //: проверить нечем, значит показать поломку на ровном месте.
+  function soundCheck() {
+    if (!room) return;
+    var ok = (room.canPlaybackAudio !== false);
+    if (ok === SOUND_OK) { soundPaint(); return; }
+    SOUND_OK = ok;
+    soundPaint();
+    try {
+      console.log('[sound] canPlaybackAudio=' + ok);
+    } catch (e) {}
+  }
 
   function attachTrack(track, isDjTrack) {
       var sid = String(track.sid || ('x' + Math.random()));
@@ -1193,10 +1273,13 @@
   // ЗАКРЕПЛЁННОЕ ОКНО И ВЫСОТА ДЕЛИТЕЛЯ - ЛИЧНЫЕ И ПЕРЕЖИВАЮТ ЗАХОД. В комнату не едет
   // ничего: подстроил себе - у соседей ни один пиксель не сдвинулся.
   var layPin = '';
-  var layBigH = 0;
+  // ДВА РАЗМЕРА, А НЕ ОДИН: свободный размер это ширина И высота, и половина здесь
+  // означала бы, что уголок тянет вбок, а после перезахода окно возвращается узким.
+  var layBigH = 0, layBigW = 0;
   try {
     layPin = localStorage.getItem('rtc_lay_pin') || '';
     layBigH = parseInt(localStorage.getItem('rtc_lay_bigh') || '0', 10) || 0;
+    layBigW = parseInt(localStorage.getItem('rtc_lay_bigw') || '0', 10) || 0;
     layMode = localStorage.getItem('rtc_lay_mode') || 'auto';
     if (!LAY_NAMES[layMode]) layMode = 'auto';
   } catch (e) {}
@@ -1205,6 +1288,7 @@
     try {
       localStorage.setItem('rtc_lay_pin', layPin || '');
       localStorage.setItem('rtc_lay_bigh', String(layBigH || 0));
+      localStorage.setItem('rtc_lay_bigw', String(layBigW || 0));
       localStorage.setItem('rtc_lay_mode', layMode);
     } catch (e) {}
   }
@@ -1399,7 +1483,7 @@
       // УБОРКА СТОИТ ИМЕННО ЗДЕСЬ, В ВЕТКЕ «не крупно»: вынеси её наружу - и она сносила
       // бы полосу СРАЗУ ПОСЛЕ того, как ветка «крупно» её создала (поймано пробой:
       // «делителя между окнами нет» при верном на вид коде).
-      var _sp = document.getElementById('vsplit');
+      var _sp = document.getElementById('vgrip');
       if (_sp) _sp.remove();
     }
     // ГОВОРЯЩИЙ - ОБВОДКОЙ ПЛИТКИ, И ЭТО ОДНО МЕСТО НА ВСЕ РАСКЛАДКИ. Раскладка отвечает
@@ -1426,17 +1510,26 @@
   // МЫШЬ И ПАЛЕЦ - ОДИН КОД: `pointer`-события покрывают оба, а два обработчика разошлись
   // бы на первой правке (закон №40).
   function laySplit(box) {
-    var sp = document.getElementById('vsplit');
+    // ═══ СВОБОДНЫЙ РАЗМЕР: ЗА УГОЛ, ШИРИНА И ВЫСОТА (требование Ren 30.08) ═══
+    // Полоса под окном была `cursor:row-resize` и читала ТОЛЬКО `clientY` - то есть
+    // тянулась исключительно по высоте, а договаривались про размер, как у окна в
+    // системе. Уголок живёт НА САМОЙ КРУПНОЙ ПЛИТКЕ, а не отдельным блоком: элемент,
+    // прибитый к соседу, уезжает от него при первой же смене раскладки.
+    var big = box.querySelector('.vwrap.big');
+    var old = document.getElementById('vgrip');
+    if (!big) { if (old) old.remove(); return; }
+    var sp = old;
     if (!sp) {
       sp = document.createElement('div');
-      sp.id = 'vsplit';
-      sp.title = 'Потяни, чтобы изменить размер. Двойной тап - вернуть как было';
-      box.appendChild(sp);
-      var from = 0, base = 0;
+      sp.id = 'vgrip';
+      sp.title = 'Тяни за угол - ширина и высота. Двойной тап - вернуть как было';
+      var from = null, baseH = 0, baseW = 0;
       sp.addEventListener('pointerdown', function (e) {
-        from = e.clientY;
         var b = box.querySelector('.vwrap.big');
-        base = b ? b.getBoundingClientRect().height : 0;
+        if (!b) return;
+        var r = b.getBoundingClientRect();
+        from = { x: e.clientX, y: e.clientY };
+        baseH = r.height; baseW = r.width;
         try { sp.setPointerCapture(e.pointerId); } catch (e2) {}
         e.preventDefault();
       });
@@ -1444,21 +1537,31 @@
         if (!from) return;
         // ПОТОЛКИ НЕ УКРАШЕНИЕ: без нижнего окно схлопывается в ноль и вернуть его нечем
         // (тянуть станет не за что), без верхнего уезжают все остальные плитки.
-        var h = Math.max(120, Math.min(window.innerHeight * 0.85, base + (e.clientY - from)));
-        layBigH = Math.round(h);
+        var h = Math.max(120, Math.min(window.innerHeight * 0.85,
+                                       baseH + (e.clientY - from.y)));
+        var w = Math.max(160, Math.min(box.clientWidth || window.innerWidth,
+                                       baseW + (e.clientX - from.x)));
+        layBigH = Math.round(h); layBigW = Math.round(w);
         box.style.setProperty('--bigh', layBigH + 'px');
+        box.style.setProperty('--bigw', layBigW + 'px');
       });
-      function stop() { if (from) { from = 0; laySave(); } }
+      function stop() { if (from) { from = null; laySave(); } }
       sp.addEventListener('pointerup', stop);
       sp.addEventListener('pointercancel', stop);
       // ОБРАТНЫЙ ПУТЬ У РАЗМЕРА ТОЖЕ ЕСТЬ (закон №55): утянул окно не туда - двойной тап
-      // возвращает как было, и искать «сброс» в меню не нужно.
+      // возвращает как было, и искать «сброс» в меню не нужно. Возвращаются ОБА размера:
+      // вернуть половину значит оставить окно кривым и без способа это починить.
       sp.addEventListener('dblclick', function () {
-        layBigH = 0; box.style.removeProperty('--bigh'); laySave();
+        layBigH = 0; layBigW = 0;
+        box.style.removeProperty('--bigh'); box.style.removeProperty('--bigw');
+        laySave();
         say('Размер окна вернул к обычному.');
       });
     }
+    // УГОЛОК ПЕРЕЕЗЖАЕТ К НЫНЕШНЕЙ КРУПНОЙ ПЛИТКЕ: закрепили другого - тянуть надо его.
+    if (sp.parentNode !== big) big.appendChild(sp);
     if (layBigH) box.style.setProperty('--bigh', layBigH + 'px');
+    if (layBigW) box.style.setProperty('--bigw', layBigW + 'px');
   }
 
   // ═══ ВО ВЕСЬ ЭКРАН: У TELEGRAM СВОЙ API, У БРАУЗЕРА СВОЙ ═══
@@ -2041,12 +2144,46 @@
   var SND_BUF = {};                 // id -> AudioBuffer (или null, если не вышло)
   var SND_FILES = null;             // список id, для которых файл ЕСТЬ
 
+  //: ПОЧЕМУ ИГРАЕТ СИНТЕЗ - ОБЯЗАНО БЫТЬ НАПИСАНО, А НЕ ВЫЯСНЯТЬСЯ УГАДЫВАНИЕМ.
+  //: Три круга живых прогонов ушли на «файлы лежат, а играет синтез» ровно потому, что
+  //: КАЖДЫЙ сбой этой цепочки был проглочен: `.catch(){}` у манифеста, `.catch(){}` у
+  //: загрузки, и `SND_BUF[id] = null` без единого слова. Отсюда одна переменная, которую
+  //: видно и человеку в строке состояния, и пробе.
+  var SND_DIAG = '';
+  function sndSay(why) {
+    SND_DIAG = why;
+    window.__SND_DIAG = why;              // шов для браузерной пробы
+    try { console.log('[snd] ' + why); } catch (e) {}
+    //: ПРИЧИНА ПРИЕЗЖАЕТ ПОЗЖЕ ПЕРВОЙ ОТРИСОВКИ (манифест асинхронный), поэтому строку
+    //: надо ПЕРЕРИСОВАТЬ. Без этого она появлялась бы только со следующим изменением
+    //: звука - то есть почти никогда.
+    try { if (typeof window.__paintAudio === 'function') window.__paintAudio(); } catch (e) {}
+  }
+
   function sndManifest() {
     if (SND_FILES !== null) return Promise.resolve(SND_FILES);
     return fetch('snd/index.json', { cache: 'no-cache' })
-      .then(function (r) { return r.ok ? r.json() : []; })
-      .catch(function () { return []; })
-      .then(function (j) { SND_FILES = Array.isArray(j) ? j : []; return SND_FILES; });
+      .then(function (r) {
+        if (!r.ok) { sndSay('манифест snd/index.json: HTTP ' + r.status); return []; }
+        return r.json().catch(function (e) {
+          //: НЕ-JSON ЗДЕСЬ ЗНАЧИТ, ЧТО НАМ ОТДАЛИ НЕ ТО (страницу-заглушку, ошибку CDN).
+          //: Прежняя редакция схлопывала это в «файлов нет», то есть отсутствие файлов и
+          //: сломанную выкладку было НЕЧЕМ различить.
+          sndSay('манифест не разобрался (' + String(e && e.message || e).slice(0, 60)
+                 + ') - похоже, по этому адресу лежит не JSON');
+          return [];
+        });
+      })
+      .catch(function (e) {
+        sndSay('манифест не доехал: ' + String(e && e.message || e).slice(0, 60));
+        return [];
+      })
+      .then(function (j) {
+        if (!Array.isArray(j)) { sndSay('манифест не список - беру синтез'); j = []; }
+        else if (!j.length && !SND_DIAG) sndSay('манифест пуст: файлов не выложено');
+        SND_FILES = j;
+        return SND_FILES;
+      });
   }
 
   // ═══ ДВЕРЬ, КОТОРУЮ НАПИСАЛИ И НЕ ОТКРЫЛИ (живой отказ Ren 30.08) ═══
@@ -2062,20 +2199,98 @@
     if (_SND_BOOTED) return;
     _SND_BOOTED = true;
     sndManifest().then(function (ids) {
-      if (!ids.length) return;
+      if (!ids.length) return;                    // причину уже назвал `sndManifest`
       var ac = actx();
-      if (!ac) { _SND_BOOTED = false; return; }   // контекста ещё нет - попробуем позже
+      if (!ac) {
+        //: КОНТЕКСТА ЕЩЁ НЕТ - НО ВТОРОЙ ПУТЬ ЕГО И НЕ ТРЕБУЕТ. Прежняя редакция просто
+        //: уходила молча, и до первого тапа файлы не готовились ничем.
+        _SND_BOOTED = false;
+        sndSay('звуковой контекст ещё не поднят - готовлю файлы медиа-элементом');
+        ids.forEach(function (id) { if (SOUNDS[id]) sndTryEl(id); });
+        return;
+      }
       ids.forEach(function (id) { if (SOUNDS[id]) sndLoad(ac, id); });
     });
   }
 
+  //: ═══ ДВА ПУТИ ДЕКОДИРОВАНИЯ, ПОТОМУ ЧТО ОДИН ЕСТЬ НЕ ВЕЗДЕ ═══
+  //: `decodeAudioData` и `<audio>` - РАЗНЫЕ конвейеры браузера, и формат, который не
+  //: берёт первый, второй иногда играет. Какой именно путь мёртв у Telegram на Mac, из
+  //: контейнера не установить (CDN закрыт, закон №48), поэтому мы не гадаем, а пробуем
+  //: оба и НАЗЫВАЕМ исход. Второй путь идёт мимо `_MASTER` - у медиа-элемента своя
+  //: громкость, и это цена, а не недосмотр.
+  //: ОТКАЗ БОЛЬШЕ НЕ ВЕЧЕН. Было `SND_BUF[id] = null`, а условие повтора - `=== undefined`:
+  //: одна неудача (сеть моргнула на входе в комнату) убивала файл до перезахода. Теперь
+  //: помечается ТОЛЬКО то, что повтором не лечится, - формат, который платформа не берёт.
+  var SND_EL = {};                  // id -> HTMLAudioElement (второй путь)
+  var SND_DEAD = {};                // id -> true: формат не берётся, повторять нечего
+
   function sndLoad(ac, id) {
-    if (SND_BUF[id] !== undefined) return Promise.resolve(SND_BUF[id]);
+    if (SND_BUF[id] !== undefined && SND_BUF[id] !== null) {
+      return Promise.resolve(SND_BUF[id]);
+    }
+    if (SND_DEAD[id]) return Promise.resolve(null);
     return fetch('snd/' + id + '.ogg')
-      .then(function (r) { return r.ok ? r.arrayBuffer() : Promise.reject(0); })
-      .then(function (b) { return ac.decodeAudioData(b); })
+      .then(function (r) {
+        if (!r.ok) return Promise.reject(new Error('HTTP ' + r.status));
+        return r.arrayBuffer();
+      })
+      .then(function (b) {
+        if (!b || !b.byteLength) return Promise.reject(new Error('пустой файл'));
+        return ac.decodeAudioData(b);
+      })
       .then(function (buf) { SND_BUF[id] = buf; return buf; })
-      .catch(function () { SND_BUF[id] = null; return null; });
+      .catch(function (e) {
+        var m = String((e && e.message) || e).slice(0, 70);
+        //: НЕ ДЕКОДИРУЕТСЯ - ПРОБУЕМ МЕДИА-ЭЛЕМЕНТОМ. Если и он не берётся, формат тут
+        //: не играется ничем, и это ОТДЕЛЬНЫЙ факт, который надо сказать вслух.
+        return sndTryEl(id).then(function (ok) {
+          if (ok) { sndSay('файл ' + id + ' не декодируется WebAudio (' + m
+                           + '), играю его через <audio>'); return null; }
+          SND_DEAD[id] = true;
+          SND_BUF[id] = null;
+          sndSay('файл ' + id + ' не играется ни WebAudio, ни <audio> (' + m
+                 + ') - остаётся синтез');
+          return null;
+        });
+      });
+  }
+
+  //: ВТОРОЙ ПУТЬ: медиа-элемент. Проверяем ФАКТ - дошло ли до воспроизведения, а не
+  //: «мы позвали play()». `canplaythrough` без него зелен и на элементе, которому
+  //: браузер потом откажет.
+  function sndTryEl(id) {
+    return new Promise(function (res) {
+      var a = SND_EL[id];
+      if (a) { res(true); return; }
+      try { a = new Audio('snd/' + id + '.ogg'); } catch (e) { res(false); return; }
+      a.preload = 'auto';
+      var done = false;
+      var fin = function (ok) {
+        if (done) return;
+        done = true;
+        if (ok) SND_EL[id] = a;
+        res(ok);
+      };
+      a.addEventListener('canplaythrough', function () { fin(true); });
+      a.addEventListener('error', function () { fin(false); });
+      setTimeout(function () { fin(false); }, 4000);
+      try { a.load(); } catch (e) { fin(false); }
+    });
+  }
+
+  //: ИГРАЕМ ВТОРЫМ ПУТЁМ. Копию элемента берём на каждый тап: один и тот же `<audio>`,
+  //: перезапущенный до конца звука, обрывает сам себя - хлопки подряд слились бы в один.
+  function sndPlayEl(id) {
+    var a = SND_EL[id];
+    if (!a) return false;
+    try {
+      var c = a.cloneNode(true);
+      c.volume = 1.0;
+      var pr = c.play();
+      if (pr && pr.catch) pr.catch(function () {});
+      return true;
+    } catch (e) { return false; }
   }
 
   //: -> сыграл ли. Отвечаем ФАКТОМ, а не намерением: не поднялся контекст - вызывающий
@@ -2094,12 +2309,16 @@
         return true;
       } catch (e) { /* дальше синтезом */ }
     }
+    //: ВТОРОЙ ПУТЬ РАВНОПРАВЕН ПЕРВОМУ: файл, который не берёт WebAudio, но играет
+    //: медиа-элемент, - это ТОТ ЖЕ файл, а не «почти получилось».
+    if (sndPlayEl(id)) return true;
     if (SND_FILES === null) sndBoot();      // первый звук до загрузки манифеста
-    if (SND_FILES && SND_FILES.indexOf(id) >= 0 && SND_BUF[id] === undefined) {
+    if (SND_FILES && SND_FILES.indexOf(id) >= 0
+        && SND_BUF[id] === undefined && !SND_DEAD[id]) {
       // ФАЙЛ ЕСТЬ, НО ЕЩЁ НЕ ЗАГРУЖЕН: тянем и играем, когда приедет. Ждать его молча
       // нельзя - человек тапнул и обязан услышать хоть что-то в эту же секунду.
       sndLoad(ac, id).then(function (b) {
-        if (!b) return;
+        if (!b) { sndPlayEl(id); return; }
         try {
           var s2 = ac.createBufferSource();
           s2.buffer = b; s2.connect(_MASTER); s2.start(ac.currentTime + 0.01);
@@ -2280,6 +2499,11 @@
         if (isDj(p2) && !Object.keys(djSids).length) { djTrack = null; showDjVol(false); }
         return;
       }
+      // ОТПИСКА ОТ ВИДЕО РАЗБИРАЕТСЯ НИЖЕ И РАЗБИРАЛАСЬ ВСЕГДА. Я успел вписать сюда
+      // ВТОРУЮ такую же ветку, прочитав только голову обработчика, - и поймала это
+      // ПОДСАДКА, а не чтение: дубль на живом коде невидим, а читателю врёт.
+      // НАСТОЯЩАЯ НЕДОСТАЧА БЫЛА У ДРУГОГО ПРИЗНАКА - `TrackMuted`: часть клиентов не
+      // отписывает дорожку, а глушит её, и вот ТАМ окно оставалось чёрным.
       if (track.kind !== 'video') return;
       // ЧУЖОЕ ВИДЕО УБИРАЕТСЯ, КОГДА ЕГО ПЕРЕСТАЛИ ДАВАТЬ. Оставленный чёрный
       // прямоугольник читается как «зависло».
@@ -2322,8 +2546,18 @@
         // СТАВИТСЯ СРАЗУ ПРИ ПОДПИСКЕ, А НЕ ПОСЛЕ ПЕРВОГО ДВИЖЕНИЯ ПОЛЗУНКА: иначе первые
         // секунды радио бьёт по ушам, и человек лезет искать регулятор уже раздражённым.
         if (isDj(p)) { djTrack = track; applyDjVolume(); showDjVol(true); }
+        //: ВОТ ТОТ САМЫЙ МОМЕНТ, РАДИ КОТОРОГО ВСЁ И ПИШЕТСЯ: дорожка соседа приехала.
+        //: Если она пришла РАНЬШЕ первого касания, браузер её не проиграет, и без этой
+        //: строки человек об этом не узнает НИКОГДА.
+        soundCheck();
       }
     });
+    //: СОБЫТИЕ SDK - ЕДИНСТВЕННЫЙ ИСТОЧНИК, КОТОРЫЙ ЗНАЕТ О СМЕНЕ БЕЗ ОПРОСА. Полагаться
+    //: только на проверку при подписке нельзя: браузер снимает и НАКЛАДЫВАЕТ запрет и в
+    //: другие моменты (смена вкладки, политика сайта, возврат из фона).
+    if (LK.RoomEvent.AudioPlaybackStatusChanged) {
+      room.on(LK.RoomEvent.AudioPlaybackStatusChanged, function () { soundCheck(); });
+    }
     room.on(LK.RoomEvent.ActiveSpeakersChanged, function (spk) {
       var now = {};
       spk.forEach(function (p) { now[p.identity] = true; });
@@ -2340,8 +2574,24 @@
     // кого он должен предупредить. Метаданные LiveKit отдаёт каждому при входе и шлёт
     // всем при смене - это состояние комнаты, а не чьё-то сообщение.
     room.on(LK.RoomEvent.RoomMetadataChanged, function (m) { showRec(m); });
-    room.on(LK.RoomEvent.TrackMuted, function (_pub, p) { upsert(p.identity, { muted: true }); });
-    room.on(LK.RoomEvent.TrackUnmuted, function (_pub, p) { upsert(p.identity, { muted: false }); });
+    // ЗАГЛУШЕННАЯ КАМЕРА - ВТОРОЙ СПОСОБ ЕЁ ВЫКЛЮЧИТЬ, И КАРТИНКИ ПОСЛЕ НЕГО НЕТ ТОЖЕ.
+    // Часть клиентов не отписывает дорожку, а помечает её `muted`: подписка жива,
+    // кадры не идут, и окно остаётся ровно таким же чёрным. Признак `muted` у нас
+    // уже приезжал - им помечали ЧЕЛОВЕКА в списке и не трогали его ОКНО.
+    room.on(LK.RoomEvent.TrackMuted, function (_pub, p) {
+      if (p) upsert(p.identity, { muted: true });
+      var _t = _pub && _pub.track;
+      if (_t && _t.kind === 'video') dropVideo(_t);
+    });
+    room.on(LK.RoomEvent.TrackUnmuted, function (_pub, p) {
+      if (p) upsert(p.identity, { muted: false });
+      var _t = _pub && _pub.track;
+      // ВЕРНУЛ КАМЕРУ - ВЕРНУЛОСЬ И ОКНО. Без этой половины «выключил» работало бы, а
+      // «включил обратно» молча не показывало ничего (закон №55).
+      if (_t && _t.kind === 'video') {
+        addVideo(_t, p ? nameOf(p) : 'Участник', false, p && p.identity);
+      }
+    });
     room.on(LK.RoomEvent.Disconnected, function (reason) {
       connected = false;
       sub('Отключился');
@@ -2393,6 +2643,20 @@
     // индикатор живёт в метаданных: вошедший позже обязан узнать о записи сразу, а не
     // остаться единственным, кто о ней не знает.
     showRec(room.metadata);
+    //: ═══ КНОПКА ЗАВОДИТСЯ СРАЗУ ПОСЛЕ ВХОДА, А НЕ ПРИ ПЕРВОЙ БЕДЕ ═══
+    //: Обработчик, повешенный в момент, когда полосу уже показали, - это ещё одна гонка
+    //: того же рода. Вешаем один раз здесь; полосой управляет `soundPaint`.
+    (function () {
+      var b = document.getElementById('sound');
+      if (!b) return;
+      b.onclick = async function () {
+        b.disabled = true;
+        try { await soundStart(); } finally { b.disabled = false; }
+      };
+    })();
+    //: И СРАЗУ СПРАШИВАЕМ СОСТОЯНИЕ: в комнате уже может кто-то говорить, и его дорожка
+    //: приезжает ВМЕСТЕ с входом - то есть заведомо до любого нашего тапа.
+    soundCheck();
 
     // ═══ ЧТО БРАУЗЕР ПРИМЕНИЛ НА САМОМ ДЕЛЕ ═══
     // Мы ПРОСИМ echoCancellation/noiseSuppression/autoGainControl в audioCaptureDefaults,
@@ -2484,8 +2748,17 @@
       var rest = [];
       if (!RNN_ON && AUDIO_HINT) rest.push(AUDIO_HINT);
       if (AUDIO_CLIP) rest.push(AUDIO_CLIP);
+      //: ПОЧЕМУ ХЛОПКИ СИНТЕЗОМ - ВИДНО ЗДЕСЬ, А НЕ В КОНСОЛИ. На телефоне до консоли не
+      //: добраться (это уже записано про сам этот блок), и три круга живых прогонов ушли
+      //: на «файлы лежат, а играет синтез» именно потому, что причина никуда не выводилась.
+      //: Строка появляется ТОЛЬКО когда что-то пошло не так: у работающих файлов её нет.
+      if (SND_DIAG) rest.push('звуки реакций: ' + SND_DIAG);
       box.textContent = AUDIO_TXT + (rest.length ? '\n' + rest.join(' · ') : '');
     }
+    //: КРЮЧОК НАРУЖУ: `sndSay` живёт на верхнем уровне (звуки нужны и до подключения), а
+    //: `paintAudio` - внутри `go()`. Прямой вызов был бы пятым случаем «объявлено внутри,
+    //: зовётся снаружи», на котором мы уже четырежды теряли полстраницы `ReferenceError`.
+    window.__paintAudio = paintAudio;
 
     //: СКОЛЬКО РАЗ ЖДЁМ МИКРОФОН. Публикация идёт своим темпом (разрешение, устройство,
     //: сеть), и на 800 мс её может ещё не быть. Раньше это стоило одной строки в
@@ -3443,6 +3716,29 @@ registerProcessor('rnn-denoise', RnnProc);
     // завершении переподключения.
     function connOk() { return String(room.state || '') === 'connected'; }
 
+    // ═══ НИ ОДНОГО ОЖИДАНИЯ SDK БЕЗ ПОТОЛКА - ЧЕТВЁРТЫЙ КРУГ ОДНОГО ДЕФЕКТА ═══
+    // ЖИВОЙ ОТКАЗ REN 30.08: камера включена, тап по «Экран» - показ не идёт, кнопка
+    // ЗАЛИПАЕТ СЕРОЙ, лечит только перезаход. Прежний сторож прикрывал ОЖИДАНИЕ
+    // публикации и не прикрывал РАЗМАТЫВАНИЕ: в `catch` стояло `await sdkOff()` без
+    // потолка, а `sdkOff()` идёт через тот же метод, который сейчас висит (у
+    // livekit-client `setTrackEnabled` первым делом ждёт `republishPromise`, и он ОБЩИЙ
+    // НА УЧАСТНИКА - поэтому живая камера вешает и экран, и микрофон). `btn.disabled =
+    // false` живёт в `finally`, до которого исполнение не доходило ВООБЩЕ.
+    // ПОЭТОМУ ПОТОЛОК ОДИН И ОБЩИЙ: любое обращение к SDK оборачивается им, и «висит»
+    // превращается в НАЗВАННЫЙ отказ, а не в серую кнопку.
+    function capped(p, what, ms) {
+      var t = null;
+      return Promise.race([
+        Promise.resolve(p).then(function (v) { clearTimeout(t); return v; },
+                                function (e) { clearTimeout(t); throw e; }),
+        new Promise(function (_, rej) {
+          t = setTimeout(function () {
+            rej(new Error(what + ': за ' + Math.round((ms || PUB_WAIT_MS) / 1000)
+                          + ' с ни ответа, ни отказа'));
+          }, ms || PUB_WAIT_MS);
+        })]);
+    }
+
     async function settle(ms) {
       var t0 = Date.now();
       while (Date.now() - t0 < ms) {
@@ -3523,10 +3819,13 @@ registerProcessor('rnn-denoise', RnnProc);
         barLabel(btn, live ? '⏹' : offIcon, word);
       }
 
-      function sdkOff() {
-        return kind === 'screen'
+      // ВЫКЛЮЧЕНИЕ - ТОЖЕ ОБРАЩЕНИЕ К SDK, И ОНО ВИСНЕТ РОВНО ТАК ЖЕ. Половина потолков
+      // хуже, чем ни одного: она создаёт впечатление, что путь прикрыт.
+      function sdkOff(ms) {
+        return capped(kind === 'screen'
           ? room.localParticipant.setScreenShareEnabled(false)
-          : room.localParticipant.setCameraEnabled(false);
+          : room.localParticipant.setCameraEnabled(false),
+          'снятие ' + word.toLowerCase(), ms);
       }
 
       async function stopShow() {
@@ -3610,7 +3909,10 @@ registerProcessor('rnn-denoise', RnnProc);
           if (lost) {
             // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
             // методом, которым включали: только он умеет снять состояние «публикуется».
-            try { await sdkOff(); } catch (e2) {}
+            // НО ЖДЁМ ОГРАНИЧЕННО: этот вызов встаёт в очередь ЗА висящей операцией и
+            // виснет вместе с ней, а мы после него обязаны вернуть человеку кнопку.
+            // Именно здесь и залипало (живой отказ Ren 30.08).
+            try { await sdkOff(4000); } catch (e2) {}
             // А ЕСЛИ ОНА ВСЁ-ТАКИ ДОЕДЕТ ПОЗЖЕ - СНИМАЕМ И ЕЁ. Иначе человек показывает
             // экран, будучи уверенным, что не показывает, и выключить нечем.
             try {
@@ -3641,6 +3943,18 @@ registerProcessor('rnn-denoise', RnnProc);
         // воспроизводит это без всякого таймаута.
         if (btn.disabled) return;
         btn.disabled = true;
+        // ═══ КНОПКА ОЖИВАЕТ ПО ТАЙМЕРУ, А НЕ ТОЛЬКО В `finally` ═══
+        // `finally` возвращает её лишь тогда, когда работа ЗАВЕРШИЛАСЬ, - а весь этот
+        // класс багов про то, что она НЕ завершается. Потолки внутри стоят, но правило
+        // должно держаться и на пути, который мы ещё не нашли: страховка на секунду выше
+        // самого долгого ожидания. Живой отказ Ren: кнопка серая до перезахода.
+        var _wake = setTimeout(function () {
+          if (!btn.disabled) return;
+          btn.disabled = false;
+          paint();
+          say('Кнопка «' + word + '» отвисла: клиент так и не ответил. Нажми ещё раз - '
+              + 'состояние у себя я вернул.', true);
+        }, PUB_WAIT_MS + 4000);
         try {
           if (live) await stopShow(); else await startShow();
         } catch (e) {
@@ -3648,6 +3962,7 @@ registerProcessor('rnn-denoise', RnnProc);
           say('Не вышло: ' + (e && e.message || e), true);
         } finally {
           // ═══ КНОПКА ВОЗВРАЩАЕТСЯ В СОСТОЯНИЕ, СООТВЕТСТВУЮЩЕЕ `live`, ВСЕГДА ═══
+          clearTimeout(_wake);
           paint();
           btn.disabled = false;
         }
@@ -3997,7 +4312,14 @@ registerProcessor('rnn-denoise', RnnProc);
         return;
       }
       chSym = s2; chTf = t2; chBy = by || '';
-      if (s2 && !chOpen) chOpen = true;      // прислали график - открываем панель
+      // ═══ ЗАМОК РЕШАЕТ СОСТОЯНИЕ, А НЕ ТОЛЬКО ОТРИСОВКУ (живой отказ Ren 30.08) ═══
+      // Здесь стояло безусловное «прислали график - открываем панель», и `lockOn` не
+      // спрашивали ВООБЩЕ. А тот, кто поставил пару, шлёт `{t:'chart'}` сердцебиением
+      // каждые пять секунд, - поэтому у вошедшего позже панель возвращалась сама: закрыл
+      // у себя, через пять секунд снова открыта; админ жал «Убрать» второй раз с тем же
+      // исходом. Замок, живущий только в `lockPaint`, чинил КАРТИНКУ, пока состояние
+      // писали мимо него. Админу панель оставляем - он и отпирает.
+      if (s2 && !chOpen && !(lockOn && !iAmAdm)) chOpen = true;
       chartPaint();
       if (!mine) return;
       beat('chart', function () {
@@ -4336,6 +4658,9 @@ registerProcessor('rnn-denoise', RnnProc);
       var b = $('chart');
       var off = lockOn && !iAmAdm;
       b.style.display = off ? 'none' : '';
+      // ЧЕЛОВЕК ВИДИТ ПАНЕЛЬ, А НЕ КНОПКУ. Пряча только кнопку, мы оставляли открытую
+      // доску открытой - и «убрал» означало «убрал у тех, кто ещё не открывал».
+      if (off) chOpen = false;
       $('lockwhy').textContent = lockOn
         ? ('Доску и график убрал админ комнаты.'
            + (iAmAdm ? ' Вернуть - кнопкой в админском блоке.' : ''))
@@ -5261,7 +5586,13 @@ registerProcessor('rnn-denoise', RnnProc);
     layMode = (layMode === 'auto') ? 'grid' : (layMode === 'grid' ? 'spk' : 'auto');
     // ВОЗВРАТ В «АВТО» - ЭТО ПОЛНЫЙ СБРОС РУЧНОГО, А НЕ ПОЛОВИНА. Оставь мы закрепление,
     // человек выбрал бы «авто» и увидел ту же картинку - то есть кнопка соврала бы.
-    if (layMode === 'auto') { layPin = ''; layBigH = 0; $('screens').style.removeProperty('--bigh'); }
+    // «АВТО» СНИМАЕТ ОБА РАЗМЕРА. Сними оно только высоту - окно осталось бы узким, и
+    // кнопка, обещающая сброс, выполняла бы его наполовину (закон №55).
+    if (layMode === 'auto') {
+      layPin = ''; layBigH = 0; layBigW = 0;
+      $('screens').style.removeProperty('--bigh');
+      $('screens').style.removeProperty('--bigw');
+    }
     laySave();
     layPaint();
     say(layMode === 'auto'
