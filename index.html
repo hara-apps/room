@@ -533,7 +533,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '8d3ee7954c44';
+  var VERSION = 'ddf69e3a2400';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -847,7 +847,15 @@
   var DJ_ID = 'bot-dj';                 // identity бота-диджея, тот же, что в rtc_dj.py
   // ПРОЦЕНТЫ, И ЭТО ДРОБНОЕ ЧИСЛО: у логарифмической шкалы низ начинается с 0.1%, а
   // целое там округлялось бы в ноль, то есть в «радио не играет».
-  var DJ_VOL_DEFAULT = 2;               // фоном под разговор (замер Ren: 1% уже громко)
+  // ═══ 20%, А НЕ 2% (решение Ren по живому созвону 30.08) ═══
+  // Прежние 2% взяты из его же раннего замера («даже 1% уже громко»), и он был про
+  // ДРУГОЕ: человек крутил ползунок у себя, слушая одну станцию в тишине. На живом
+  // созвоне вышло наоборот - «у всех, кроме включившего, громкость 0 по умолчанию,
+  // человек не понимает, почему тихо». Механизм при этом исправен: `applyDjVolume`
+  // зовётся у КАЖДОГО при подписке, просто 2% на фоне речи неотличимы от тишины.
+  // ЗАПИСАНО, ЧТОБЫ НЕ «ВЕРНУЛИ КАК БЫЛО»: это решение после живого прогона, а не
+  // недосмотр, и старый замер его не отменяет.
+  var DJ_VOL_DEFAULT = 20;              // слышно, но под разговор; убавляется ползунком
   var djTrack = null;
   var djVol = DJ_VOL_DEFAULT;
   try {
@@ -1007,6 +1015,17 @@
   //: mute/kick умеет ТОЛЬКО серверный API LiveKit, а ключ к нему есть у бота.
   var admDo = null;
 
+  //: ═══ ОТПРАВКА В КОМНАТУ - ДВЕРЬ НАРУЖУ, А НЕ ИМЯ ИЗ ЧУЖОЙ ОБЛАСТИ (пятый случай) ═══
+  //: ЖИВОЙ БЛОКЕР (Ren 30.08): «Попросить приглушиться» и «Попросить выйти» не работали
+  //: ВООБЩЕ - адресату не приходило ничего, окна не всплывало. Причина не в канале и не в
+  //: приёмнике: обработчик кнопки стоит в `pactBox` НА ВЕРХНЕМ УРОВНЕ, а `send` и
+  //: `myLabel` объявлены ВНУТРИ `go()` - тап бросал `ReferenceError`, и он же съедал
+  //: остаток обработчика. Это ПЯТЫЙ случай одного класса на этом файле (`subSticky`,
+  //: `subNote`, `dropDj`, `funPaint`, теперь `send`), поэтому лечится он не переносом
+  //: строки, а дверью: `go()` кладёт сюда свою отправку, верхний уровень зовёт её.
+  //: НЕ ГОТОВА - ГОВОРИМ ЭТО (закон №36): молчание после тапа человек читает как поломку.
+  var roomSend = null, roomLabel = null;
+
   function dropDj() {
       // ВЫКЛЮЧЕНИЕ РАДИО - СОСТОЯНИЕ КОМНАТЫ, А НЕ СОБЫТИЕ ПОДПИСКИ. `TrackUnsubscribed`
       // может не прийти вовсе (процесс убит, соединение оборвалось), а признак `dj` в
@@ -1072,7 +1091,10 @@
       if (!on) return;
       var sl = $('djv');
       sl.value = String(posOfVol(djVol));
-      $('djvlab').textContent = 'Громкость радио: ' + fmtVol(djVol) + ' (фоном под разговор)';
+      // ПОДПИСЬ НАЗЫВАЕТ ВЫХОД, А НЕ ТОЛЬКО СОСТОЯНИЕ: человек, которому радио мешает,
+      // должен видеть, что это чинится здесь же, а не выключением радио всей комнате.
+      $('djvlab').textContent = 'Громкость радио: ' + fmtVol(djVol)
+          + ' (у каждого своя - тяни, если мешает)';
       sl.oninput = function () {
           djVol = volOfPos(sl.value);
           $('djvlab').textContent = 'Громкость радио: ' + fmtVol(djVol)
@@ -1930,7 +1952,15 @@
       b.textContent = a[0];
       b.onclick = function () {
         pactFor = ''; draw();
-        send({ t: 'ask1', to: id, do: a[1], by: myLabel() });
+        //: ОТПРАВКА ЧЕРЕЗ ДВЕРЬ. Прежняя редакция звала `send` и `myLabel` НАПРЯМУЮ, а
+        //: они живут в области `go()` - тап бросал `ReferenceError` и умирал молча.
+        if (!roomSend) {
+          say('Просьбу отправить нечем: соединение с комнатой ещё не поднялось. '
+              + 'Подожди пару секунд и нажми снова.');
+          return;
+        }
+        roomSend({ t: 'ask1', to: id, do: a[1],
+                   by: (roomLabel ? roomLabel() : 'Кто-то') });
         say('Отправил ' + p.name + ': ' + (a[1] === 'quiet' ? 'приглушиться' : 'выйти')
             + '. Это просьба - решает он.');
       };
@@ -3823,9 +3853,108 @@ registerProcessor('rnn-denoise', RnnProc);
       // хуже, чем ни одного: она создаёт впечатление, что путь прикрыт.
       function sdkOff(ms) {
         return capped(kind === 'screen'
-          ? room.localParticipant.setScreenShareEnabled(false)
+          ? unpublishScreen()
           : room.localParticipant.setCameraEnabled(false),
           'снятие ' + word.toLowerCase(), ms);
+      }
+
+      // ═══ ЭКРАН БЕРЁТСЯ СИНХРОННО В САМОМ ТАПЕ, ДО ЛЮБОГО `await` ═══
+      // ЖИВОЙ ФАКТ (Ren 30.08), и он асимметричен: экран -> камера работает, камера ->
+      // экран НЕТ. Это и есть подпись механизма. `getDisplayMedia` требует ЖЕСТА
+      // человека; `getUserMedia` для камеры с уже выданным разрешением - НЕ требует.
+      // ГДЕ ТЕРЯЛСЯ ЖЕСТ - НЕ В НАШЕМ КОДЕ: у нас `setScreenShareEnabled` звался
+      // синхронно из обработчика (первый `await` стоит ПОСЛЕ него). Ожидание живёт
+      // ВНУТРИ livekit-client: `setTrackEnabled` первым делом ждёт незавершённую
+      // публикацию (`republishPromise`, ОБЩИЙ на участника - поэтому живая камера вешает
+      // и экран, и микрофон) и только ПОТОМ зовёт `getDisplayMedia`. После ожидания жест
+      // уже протух, и запрос экрана НЕ РЕЗОЛВИТСЯ И НЕ РЕДЖЕКТИТСЯ - отсюда наша же
+      // строка «за 25 с не пришло ни подтверждения, ни отказа». ПОТОЛКИ ТУТ БЕСПОЛЕЗНЫ
+      // ПО ПОСТРОЕНИЮ: они превращают вечное ожидание в названный отказ, но показа от
+      // этого не случается.
+      // ПОЭТОМУ ПОРЯДОК ОБРАТНЫЙ: сперва САМИ берём поток (первым действием тапа,
+      // синхронно), и только потом отдаём готовую дорожку в `publishTrack` - тот ничего
+      // не захватывает, жеста не требует и ждать ему нечего.
+      function grabScreen() {
+        if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) {
+          return Promise.reject(new Error('этот клиент не умеет показывать экран'));
+        }
+        // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
+        // живёт на общем канале песочницы. Читаемость текста даёт и 1080p.
+        return navigator.mediaDevices.getDisplayMedia({
+          video: { width: { max: 1920 }, height: { max: 1080 }, frameRate: { max: 15 } },
+          audio: true
+        });
+      }
+
+      // ЧТО МЫ ОПУБЛИКОВАЛИ САМИ - ПОМНИМ САМИ. `setScreenShareEnabled(false)` ведёт
+      // СВОЁ состояние, и о наших публикациях он не знает; звать его на снятие значило
+      // бы надеяться, что он их найдёт, - а цена ошибки видна СОСЕДЯМ, не нам.
+      var myScreen = [];
+
+      async function publishScreen(stream) {
+        var st = await stream;   // промис взят ДО await'ов, здесь он уже без жеста
+        var LK = window.LivekitClient || window.LiveKitClient || {};
+        var SRC = (LK.Track && LK.Track.Source) || {};
+        var tracks = st.getTracks ? st.getTracks() : [];
+        if (!tracks.length) throw new Error('пустой поток: браузер не отдал ни дорожки');
+        myScreen = [];
+        for (var i = 0; i < tracks.length; i++) {
+          var t = tracks[i];
+          // ЗВУК ВКЛАДКИ - СВОЙ ИСТОЧНИК: назови его картинкой, и LiveKit разложит его
+          // соседям как видео, а грант проверяется ПО ИСТОЧНИКУ.
+          var src = (t.kind === 'audio')
+            ? (SRC.ScreenShareAudio || 'screen_share_audio')
+            : (SRC.ScreenShare || 'screen_share');
+          var pubd = await room.localParticipant.publishTrack(t, { source: src });
+          myScreen.push(pubd || t);
+        }
+        // ЧЕЛОВЕК ЗАКРЫЛ ПОКАЗ СРЕДСТВАМИ БРАУЗЕРА («Остановить доступ») - У НАС ЭТО
+        // ТАКОЕ ЖЕ ВЫКЛЮЧЕНИЕ. Без этого кнопка осталась бы в «идёт показ» над мёртвой
+        // дорожкой, а соседи видели бы застывший кадр.
+        try {
+          var vt = st.getVideoTracks ? st.getVideoTracks()[0] : null;
+          if (vt) vt.addEventListener('ended', function () {
+            if (!live) return;
+            live = false; paint(); sweepVideos();
+            unpublishScreen().catch(function () {});
+            say('Показ экрана остановлен в браузере - снял и в комнате.', true);
+          });
+        } catch (e) {}
+        return myScreen;
+      }
+
+      async function unpublishScreen() {
+        var mine = myScreen; myScreen = [];
+        // ═══ ОТКАЗ СНЯТИЯ НЕ ГЛОТАЕТСЯ: ЕГО ЖДЁТ ЧЕЛОВЕК ═══
+        // Первая редакция ловила каждую ошибку в пустой `catch`, и `sdkOff` всегда
+        // отвечал успехом - а значит ветка «у себя выключил, но сервер снятие не
+        // подтвердил» не выполнялась НИ РАЗУ. Цена видна не нам: соседи продолжают
+        // видеть картинку, а человек уверен, что показ снят. Поймала это проба, а не
+        // чтение. Дорожки при этом гасим ВСЕ, даже если первая не снялась.
+        var bad = null;
+        for (var i = 0; i < mine.length; i++) {
+          var it = mine[i], tr = (it && it.track) ? it.track : it;
+          try { await room.localParticipant.unpublishTrack(tr, true); }
+          catch (e) { bad = bad || e; }
+          try { tr.stop(); } catch (e) {}
+        }
+        // СТРАХОВКА НА ЧУЖИЕ ПУБЛИКАЦИИ: если экран когда-то включили СТАРЫМ путём (или
+        // это второй клиент того же человека), наш список пуст, а дорожка идёт. Снимаем
+        // по ФАКТУ источника, а не по нашей памяти.
+        try {
+          var pubs = room.localParticipant.trackPublications
+                  || room.localParticipant.tracks || new Map();
+          var left = [];
+          pubs.forEach(function (pub) {
+            if (String(pub.source || '').indexOf('screen') >= 0 && pub.track) left.push(pub.track);
+          });
+          for (var j = 0; j < left.length; j++) {
+            try { await room.localParticipant.unpublishTrack(left[j], true); }
+            catch (e) { bad = bad || e; }
+          }
+        } catch (e) {}
+        if (bad) throw bad;
+        return true;
       }
 
       async function stopShow() {
@@ -3862,7 +3991,7 @@ registerProcessor('rnn-denoise', RnnProc);
         }
       }
 
-      async function startShow() {
+      async function startShow(gotStream) {
         var lost = false, pub = null;
         // ═══ ПОКАЗ УЖЕ ИДЁТ - ГОВОРИМ ЭТО, А НЕ МОЛЧИМ ═══
         // Живой случай 29.08: человек открыл комнату с двух своих клиентов, показ пошёл с
@@ -3884,12 +4013,30 @@ registerProcessor('rnn-denoise', RnnProc);
                 + 'от участника.', true);
           }
         }
+        var stream = null;
+        try {
+          // ═══ ВЫБОР ОКНА ЧЕЛОВЕКОМ НЕ ОГРАНИЧИВАЕТСЯ ПОТОЛКОМ, И ЭТО НЕ ПОБЛАЖКА ═══
+          // Он может искать нужную вкладку минуту, и это ЗАКОННО. Накрой мы его сторожем
+          // в 25 с - получили бы «ни ответа, ни отказа» на человеке, который просто
+          // выбирает. Сторож ниже стоит на ПУБЛИКАЦИИ, где ждём мы, а не он.
+          if (kind === 'screen') stream = await gotStream;
+        } catch (e) {
+          // ОТМЕНА - НЕ ПОЛОМКА: человек передумал, и говорить надо ровно это.
+          live = false;
+          var _cancel = (e && (e.name === 'NotAllowedError' || e.name === 'AbortError'));
+          say(_cancel ? 'Показ отменён - окно не выбрано.'
+                      : 'Экран взять не вышло (' + (e && e.name || 'ошибка') + '): '
+                        + (e && e.message || e), true);
+          return;
+        }
         try {
           pub = (kind === 'screen')
-            // ПОТОЛОК КАРТИНКИ ЗАДАН НАРОЧНО: 2880x1448@30 это десятки мегабит, а комната
-            // живёт на общем канале песочницы. Читаемость текста даёт и 1080p.
-            ? room.localParticipant.setScreenShareEnabled(
-                true, { audio: true, resolution: { width: 1920, height: 1080, frameRate: 15 } })
+            // ═══ ПОТОК УЖЕ У НАС В РУКАХ - ПУБЛИКУЕМ ЕГО, А НЕ ПРОСИМ SDK СХОДИТЬ ЗА НИМ
+            // Почему так, см. `grabScreen` выше: `setScreenShareEnabled` внутри себя
+            // ЖДЁТ незавершённую публикацию и только потом зовёт `getDisplayMedia` - а
+            // после ожидания жеста человека уже нет, и запрос экрана не резолвится и не
+            // реджектится. `publishTrack` ничего не захватывает и жеста не требует.
+            ? publishScreen(stream)
             : room.localParticipant.setCameraEnabled(true);
           await Promise.race([pub, new Promise(function (_, rej) {
             setTimeout(function () {
@@ -3925,6 +4072,13 @@ registerProcessor('rnn-denoise', RnnProc);
             } catch (e4) {}
           }
           stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
+          // ВЗЯТЫЙ, НО НЕ ОПУБЛИКОВАННЫЙ ПОТОК `stopLocalMedia` НЕ ВИДИТ: он ходит по
+          // публикациям LiveKit, а этой дорожки там ещё нет. Оставь мы её - у человека
+          // горит «идёт доступ к экрану» над комнатой, где показа нет.
+          if (stream && stream.getTracks) {
+            try { stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e5) {} }); }
+            catch (e6) {}
+          }
           live = false;
           say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
               + (e && e.message || e), true);
@@ -3942,6 +4096,21 @@ registerProcessor('rnn-denoise', RnnProc);
         // publication promise timed out»; нетерпеливый двойной тап по «Показать экран»
         // воспроизводит это без всякого таймаута.
         if (btn.disabled) return;
+        // ═══ ЗАПРОС ЭКРАНА - ПЕРВОЕ ДЕЙСТВИЕ ТАПА, ДО ЕДИНОГО `await` ═══
+        // Жест человека живёт ровно до первого ожидания (см. `grabScreen`). Здесь мы ещё
+        // ВНУТРИ жеста, поэтому берём поток сами; всё остальное - `btn.disabled`,
+        // таймеры, ожидания SDK - идёт ПОСЛЕ. Порядок этих двух строк и есть починка:
+        // поменяй их местами, и «камера -> экран» снова повиснет молча.
+        var _screen = null;
+        if (kind === 'screen' && !live) {
+          try {
+            _screen = grabScreen();
+            // ОТКАЗ ЧЕЛОВЕКА («Отмена» в окне выбора) - НЕ ОШИБКА И НЕ ПАДЕНИЕ СТРАНИЦЫ.
+            // Без этого обработчика браузер напишет unhandled rejection в консоль, а мы
+            // об отмене узнаем ниже, из `await`.
+            _screen.catch(function () {});
+          } catch (e) { _screen = Promise.reject(e); }
+        }
         btn.disabled = true;
         // ═══ КНОПКА ОЖИВАЕТ ПО ТАЙМЕРУ, А НЕ ТОЛЬКО В `finally` ═══
         // `finally` возвращает её лишь тогда, когда работа ЗАВЕРШИЛАСЬ, - а весь этот
@@ -3956,7 +4125,7 @@ registerProcessor('rnn-denoise', RnnProc);
               + 'состояние у себя я вернул.', true);
         }, PUB_WAIT_MS + 4000);
         try {
-          if (live) await stopShow(); else await startShow();
+          if (live) await stopShow(); else await startShow(_screen);
         } catch (e) {
           // СЮДА ПОПАДАТЬ НЕ ДОЛЖНЫ - но если попали, кнопка обязана ожить всё равно.
           say('Не вышло: ' + (e && e.message || e), true);
@@ -4039,6 +4208,11 @@ registerProcessor('rnn-denoise', RnnProc);
     function myLabel() {
       return human(room.localParticipant.name, room.localParticipant.identity);
     }
+    //: ДВЕРЬ НАРУЖУ ЗАПОЛНЯЕТСЯ ЗДЕСЬ, РЯДОМ С ТЕМ, ЧТО ОНА ОТДАЁТ. Тот же приём, что у
+    //: `admDo`: верхний уровень не имеет доступа к области `go()`, а половина кнопок
+    //: комнаты живёт именно там.
+    roomSend = send;
+    roomLabel = myLabel;
     function nameOf(p) {
       var rec = people[p.identity];
       return (rec && rec.name && !rec.me) ? rec.name : human(p.name, p.identity);
@@ -4222,6 +4396,9 @@ registerProcessor('rnn-denoise', RnnProc);
                 ['DXY', 'TVC:DXY'], ['GOLD', 'TVC:GOLD']];
     var TFS = [['5м', '5'], ['15м', '15'], ['1ч', '60'], ['4ч', '240'], ['D', 'D']];
     var chSym = '', chTf = '60', chBy = '', chOpen = false;
+    //: ЧЕЛОВЕК ЗАКРЫЛ ПАНЕЛЬ САМ - ЭТО РЕШЕНИЕ, А НЕ СЛУЧАЙНОСТЬ. Без этого признака
+    //: «закрыто» и «ещё не открывал» неразличимы, и чужой график распахивал бы её снова.
+    var chShut = false;
 
     //: СИМВОЛ ЧИСТИТСЯ, ПОТОМУ ЧТО ПРИХОДИТ ОТ КЛИЕНТА И УЕЗЖАЕТ В ЧУЖОЙ ВИДЖЕТ. Строка
     //: из канала данных - это строка, которую написал сосед, а не мы; пустить её как есть
@@ -4319,7 +4496,14 @@ registerProcessor('rnn-denoise', RnnProc);
       // у себя, через пять секунд снова открыта; админ жал «Убрать» второй раз с тем же
       // исходом. Замок, живущий только в `lockPaint`, чинил КАРТИНКУ, пока состояние
       // писали мимо него. Админу панель оставляем - он и отпирает.
-      if (s2 && !chOpen && !(lockOn && !iAmAdm)) chOpen = true;
+      // ═══ ЧУЖОЙ ГРАФИК НЕ РАСПАХИВАЕТ ПАНЕЛЬ ТОМУ, КТО ЕЁ ЗАКРЫЛ (замечание Ren) ═══
+      // Панель ЛОКАЛЬНАЯ: её открывает и закрывает каждый у себя. А сюда приходит чужое
+      // состояние графика, и прежняя редакция открывала панель ВСЕМ - то есть один
+      // человек занимал пол-экрана остальным, и закрыть это было нельзя: сердцебиение
+      // идёт раз в пять секунд и открывало её заново.
+      // ЯВНЫЙ ВЫБОР ЧЕЛОВЕКА СИЛЬНЕЕ ДЕФОЛТА: не открывал и не закрывал - показываем
+      // (иначе поставивший график был бы с ним один); закрыл руками - уважаем.
+      if (s2 && !chOpen && !chShut && !(lockOn && !iAmAdm)) chOpen = true;
       chartPaint();
       if (!mine) return;
       beat('chart', function () {
@@ -4658,19 +4842,26 @@ registerProcessor('rnn-denoise', RnnProc);
       var b = $('chart');
       var off = lockOn && !iAmAdm;
       b.style.display = off ? 'none' : '';
-      // ЧЕЛОВЕК ВИДИТ ПАНЕЛЬ, А НЕ КНОПКУ. Пряча только кнопку, мы оставляли открытую
-      // доску открытой - и «убрал» означало «убрал у тех, кто ещё не открывал».
+      // ═══ УБИРАЕТСЯ СОДЕРЖИМОЕ, А КНОПКА ВТОРИЧНА (живой отказ Ren 30.08) ═══
+      // Прежняя редакция ставила `chOpen = false` и звала перерисовку строкой ниже, под
+      // условием `if (lockOn && chOpen)` - а `chOpen` к этому моменту УЖЕ был false.
+      // Условие не выполнялось НИКОГДА, `chartPaint()` не звался, и у не-админа
+      // пропадала ровно КНОПКА, при том что доска и график оставались на экране. То есть
+      // замок делал ровно обратное тому, ради чего он есть.
+      // ПОЭТОМУ ПЕРЕРИСОВКА БЕЗУСЛОВНА: она идемпотентна и ничего не стоит, а экономия
+      // на ней покупала класс багов (тот же вывод, что у отрисовки самого замка).
       if (off) chOpen = false;
       $('lockwhy').textContent = lockOn
         ? ('Доску и график убрал админ комнаты.'
            + (iAmAdm ? ' Вернуть - кнопкой в админском блоке.' : ''))
         : '';
-      if (lockOn && chOpen) { chOpen = false; chartPaint(); }
+      chartPaint();
     };
     lockPaint();
 
     $('chart').onclick = function () {
       chOpen = !chOpen;
+      chShut = !chOpen;          // закрыл руками - чужой график больше не распахнёт
       chartPaint();
       // ОТКРЫЛИ ПУСТУЮ ПАНЕЛЬ - СПРАШИВАЕМ У КОМНАТЫ, ЧТО ТАМ УЖЕ ЕСТЬ. Сердцебиение
       // догонит и само, но ждать до пяти секунд перед пустым экраном человек прочитает
