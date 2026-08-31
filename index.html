@@ -163,6 +163,30 @@
   #screens.spk .vwrap.big video { height:100%; object-fit:contain; }
   #screens.spk .vwrap.small { order:2; width:34%; display:inline-block; }
   #screens.spk .strip { order:2; display:flex; gap:6px; overflow-x:auto; }
+  /* ═══ СВОБОДНЫЙ ХОЛСТ: ОКНА ТАСКАЮТСЯ И ТЯНУТСЯ, КАК В СИСТЕМЕ ═══
+     РАСКЛАДКА ЛОКАЛЬНАЯ - в комнату не уезжает ни байта: человек двигает СВОЙ экран и
+     никого не трогает. Высота холста задана явно: у absolute-детей своей высоты нет, и
+     без неё контейнер схлопнулся бы в ноль вместе со всеми окнами. */
+  #screens.free { position:relative; display:block; height:var(--freeh, 62vh);
+                  min-height:220px; overflow:hidden;
+                  background:var(--soft); border-radius:12px; }
+  #screens.free .vwrap { position:absolute; margin:0; touch-action:none; }
+  #screens.free .vwrap video { width:100%; height:100%; object-fit:contain; }
+  /* ЗАГОЛОВОК - ЭТО РУЧКА, И ОН ОБЯЗАН БЫТЬ ВИДЕН. Тащить за само видео нельзя: тап по
+     нему это уже действие (закрепить, развернуть), и два смысла на одном жесте
+     кончаются тем, что не работает ни один. */
+  #screens.free .vnm { cursor:grab; top:0; left:0; right:0; bottom:auto;
+                       border-radius:12px 12px 0 0; padding:4px 8px;
+                       background:var(--veil); touch-action:none; }
+  #screens.free .vnm:active { cursor:grabbing; }
+  #screens.free .wgrip { position:absolute; right:1px; bottom:1px; width:20px; height:20px;
+                         cursor:nwse-resize; touch-action:none; z-index:4; opacity:.9;
+                         background:linear-gradient(135deg, transparent 42%, var(--line) 42%,
+                                    var(--line) 58%, transparent 58%); }
+  /* КРИПТО-ПАНЕЛЬ НА ХОЛСТЕ - ТАКОЕ ЖЕ ОКНО. Иначе «доска и график» остались бы
+     единственным, что нельзя подвинуть, и холст был бы наполовину свободным. */
+  #screens.free #crypto { position:absolute; margin:0; touch-action:none;
+                          overflow:auto; z-index:2; }
   /* ДЕЛИТЕЛЬ - РАЗМЕР ТОЛЬКО У СЕБЯ. Он не едет в комнату ни одним байтом: человек
      подстраивает СВОЙ экран и никого не двигает. Полоса широкая нарочно - пальцем в
      четыре пикселя не попасть. */
@@ -356,6 +380,9 @@
 <div class="card" id="crypto" style="display:none">
   <div id="chartbox"><canvas id="draw"></canvas></div>
   <p class="me" id="chartwho"></p>
+  <!-- ЧТО ПОКАЗАНО КОМНАТЕ. Ряд стоит НАД пресетами пар: сперва «что смотрим», потом
+       «что именно» - иначе кнопки пар читаются как относящиеся к любому виджету. -->
+  <div id="wgts"></div>
   <div id="syms"></div>
   <div id="tfs"></div>
   <div id="tools2"></div>
@@ -419,6 +446,16 @@
        происходит в комнате. Полноэкранная кнопка появляется только там, где клиент это
        умеет: у Telegram это Bot API 8.0, а на старом клиенте её быть не должно вовсе. -->
   <button id="lay" class="wide">🔲 Раскладка: авто</button>
+  <!-- ═══ ИМЕНОВАННЫЕ РАСКЛАДКИ: ЭТО ЗАГОТОВКА ЧЕЛОВЕКА, А НЕ ВКУС УСТРОЙСТВА ═══
+       Текущая расстановка живёт в localStorage и правильно там живёт. Слот - другое:
+       расставил на ноутбуке, открыл с планшета и ждёт то же самое. localStorage живёт в
+       одном браузере и умирает вместе с очищенными данными сайта, поэтому слоты хранит
+       бот. Кнопки появляются ТОЛЬКО там, где расставлять есть чем (см. `freeOk`):
+       на мобиле сетка без перетаскивания, и «сохранить раскладку» там нечего. -->
+  <div id="slots" style="display:none">
+    <button id="slotsave" class="pre">💾 Сохранить раскладку</button>
+    <div id="slotlist"></div>
+  </div>
   <!-- ═══ ПОДПИСЬ ПЕРЕКЛЮЧАТЕЛЯ - ЭТО ДЕЙСТВИЕ, А НЕ СОСТОЯНИЕ (решение Ren 30.08) ═══
        «Тема: тёмная» человек читает как команду «сделай тёмную» и жмёт, чтобы получить
        то, что у него уже есть. Правило применено ко ВСЕМ переключателям «Ещё»: подпись
@@ -456,6 +493,9 @@
     <input id="djv" type="range" min="0" max="30" step="1">
   </div>
   <p class="me" id="showhint"></p>
+  <!-- ВЫХОД В БРАУЗЕР ПОКАЗЫВАЕТСЯ ТОЛЬКО КОГДА ОН ПРАВДА НУЖЕН: постоянная кнопка
+       «открой в браузере» читалась бы как «аппка не работает». -->
+  <button id="browserway" class="wide" style="display:none">🌐 Открыть комнату в браузере</button>
   <!-- ПРИЧИНА, ПО КОТОРОЙ КНОПКИ НЕТ, ЖИВЁТ РЯДОМ С МЕСТОМ, ГДЕ ЕЁ ЖДУТ. Общая
        строка состояния тут не годится: её перетирает следующее сообщение, и
        объяснение исчезает через секунду - проверено браузером, чтением не видно. -->
@@ -533,7 +573,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'ddf69e3a2400';
+  var VERSION = 'e166335b05bc';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -769,6 +809,25 @@
   //: разматывание и возврат кнопки исполняются боевые (закон №56: подменять можно провод,
   //: но не проверяемую логику).
   var PUB_WAIT_MS = (window.__PUBWAIT | 0) || 25000;
+  //: ═══ ВЫБОР ОКНА: ДВА ПОТОЛКА, И ОНИ ПРО РАЗНОЕ ═══
+  //: ЖИВОЙ ОТКАЗ REN 31.08: в Telegram WebView при СВЕЖЕМ заходе диалог «Делиться экраном
+  //: или окном» ПОЯВЛЯЕТСЯ, а после включённой камеры не появляется ВОВСЕ - и запрос не
+  //: резолвится и не реджектится. Прежняя редакция ждала его БЕЗ потолка (человек ведь
+  //: правда может искать вкладку минуту), поэтому вместо диагноза человек получал через
+  //: 29 с нашу же строку «кнопка отвисла: клиент так и не ответил» - фразу о нашей кнопке,
+  //: которая не объясняет НИЧЕГО.
+  //: МЯГКИЙ (7 с) НИЧЕГО НЕ ОТМЕНЯЕТ - он говорит, что мы ждём диалог, и что делать, если
+  //: его не видно. ЖЁСТКИЙ (60 с) сдаётся и НАЗЫВАЕТ причину. Разделять их обязательно:
+  //: один потолок либо торопит выбирающего, либо оставляет висеть того, у кого диалога нет.
+  var SCREEN_HINT_MS = (window.__PICKHINT | 0) || 7000;
+  var SCREEN_PICK_MS = (window.__PICKWAIT | 0) || 60000;
+  //: ═══ НАША ЖЕ НЕЗАВЕРШЁННАЯ ПУБЛИКАЦИЯ - ЭТО ФАКТ, КОТОРЫЙ МЫ ЗНАЕМ ═══
+  //: У livekit-client публикация сериализуется НА УЧАСТНИКА (`setTrackEnabled` первым
+  //: делом ждёт `republishPromise`), и вторая операция встаёт в очередь за первой. Это и
+  //: есть исходный механизм: человек включил камеру и, не дождавшись, жмёт «Экран».
+  //: Чинить его в SDK нечем, но НАМ не нужно гадать - мы сами эти операции и запускаем.
+  //: Поэтому не стакаем: пока своя публикация в полёте, вторую не начинаем и ГОВОРИМ это.
+  var PUB_BUSY = '';
   var room = null, people = {}, micOn = true, recOn = false, djOn = false,
       subOn = false;
   //: ═══ ШУМОДАВ: СОСТОЯНИЕ ЖИВЁТ СНАРУЖИ КОМНАТЫ, И ЭТО НЕ ВКУСОВЩИНА ═══
@@ -1014,6 +1073,10 @@
   //: АДМИНСКОЕ ДЕЙСТВИЕ НАД УЧАСТНИКОМ. Той же дорогой и по той же причине: настоящий
   //: mute/kick умеет ТОЛЬКО серверный API LiveKit, а ключ к нему есть у бота.
   var admDo = null;
+  //: ПРОСЬБА К БОТУ ЧЕРЕЗ ЯЩИК. Шестой случай того же класса: `ask` живёт внутри `go()`,
+  //: а кнопки раскладок стоят на верхнем уровне и звались бы до подключения. Не
+  //: провязано - кнопка НАЗЫВАЕТ причину, а не молчит.
+  var roomAsk = null;
 
   //: ═══ ОТПРАВКА В КОМНАТУ - ДВЕРЬ НАРУЖУ, А НЕ ИМЯ ИЗ ЧУЖОЙ ОБЛАСТИ (пятый случай) ═══
   //: ЖИВОЙ БЛОКЕР (Ren 30.08): «Попросить приглушиться» и «Попросить выйти» не работали
@@ -1291,7 +1354,19 @@
   //: появляется не сразу, и поиск по нему снимал бы не то (а чаще - ничего).
   var vids = [];
   var layMode = 'auto';
-  var LAY_NAMES = { auto: 'авто', grid: 'сетка', spk: 'крупно' };
+  var LAY_NAMES = { auto: 'авто', grid: 'сетка', spk: 'крупно', free: 'свободно' };
+  //: ═══ СВОБОДНЫЙ ХОЛСТ - ТОЛЬКО ТАМ, ГДЕ ЕСТЬ ЧЕМ ТАЩИТЬ ═══
+  //: НА МОБИЛЕ ЕГО НЕТ, И ЭТО РЕШЕНИЕ, А НЕ НЕДОДЕЛКА: на 390 точках ширины четыре
+  //: свободных окна превращаются в кашу, которую пальцем не разобрать, а «вернуть как
+  //: было» человек ищет дольше, чем городил. Там остаётся СЕТКА - она и так читается.
+  //: ПРИЗНАК - ГРУБЫЙ УКАЗАТЕЛЬ И УЗКИЙ ЭКРАН, а не UserAgent: UA врёт (режим «для
+  //: компьютеров» на телефоне), а способ ввода это факт.
+  function freeOk() {
+    try {
+      if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) return false;
+    } catch (e) {}
+    return (window.innerWidth || 0) >= 700;
+  }
   // ЗАКРЕПЛЁННОЕ ОКНО И ВЫСОТА ДЕЛИТЕЛЯ - ЛИЧНЫЕ И ПЕРЕЖИВАЮТ ЗАХОД. В комнату не едет
   // ничего: подстроил себе - у соседей ни один пиксель не сдвинулся.
   var layPin = '';
@@ -1304,6 +1379,9 @@
     layBigW = parseInt(localStorage.getItem('rtc_lay_bigw') || '0', 10) || 0;
     layMode = localStorage.getItem('rtc_lay_mode') || 'auto';
     if (!LAY_NAMES[layMode]) layMode = 'auto';
+    // РАССТАВЛЕННОЕ ПЕРЕЖИВАЕТ ПЕРЕЗАХОД (требование Ren): человек расставил окна под
+    // свой экран, вышел за кофе и вернулся - переставлять заново он не подписывался.
+    freeLoad();
   } catch (e) {}
 
   function laySave() {
@@ -1395,6 +1473,59 @@
   // работающим микрофоном. Это тот же класс, что залипшая кнопка показа (закон №55:
   // обратный путь обязан быть проверен), только тише - у показа хотя бы был текст.
   // ВЕРДИКТ ПО ФАКТУ (закон №35): состояние берём у SDK после вызова, а не из намерения.
+    // ═══ «silence detected on local audio track» - ЧЬЯ ЭТО ТРЕВОГА И ЛОЖНАЯ ЛИ ═══
+  // ВОПРОС REN 31.08: строка горит при ИСПРАВНОМ микрофоне. Она НЕ наша - её печатает
+  // сам livekit-client: после публикации он ~200 мс слушает опубликованную дорожку и,
+  // не найдя ни одного ненулевого сэмпла, предупреждает. Это ПРЕДУПРЕЖДЕНИЕ, а не
+  // ошибка: на звук оно не влияет, дорожка уходит как уходила.
+  // ПОЧЕМУ ОНО МОЖЕТ БЫТЬ ЛОЖНЫМ ИМЕННО У НАС: публикуется дорожка ПОСЛЕ шумодава
+  // (`setProcessor` подменяет её выход), а наш worklet собирает кадр RNNoise из 480
+  // сэмплов при кванте WebAudio в 128 - первые кванты он копит и отдаёт тишину. Плюс
+  // человек в момент публикации обычно молчит. Оба случая дают ровно эту строку.
+  // СПОРИТЬ С НЕЙ НЕЛЬЗЯ, А ИЗМЕРИТЬ МОЖНО: печатаем СВОЙ уровень в ТО ЖЕ окно. Дальше
+  // это не рассуждение, а два числа рядом - и следующий живой прогон отвечает сам.
+  //: УРОВЕНЬ КАДРА В дБ. Наверху, потому что читателей ДВА и один из них - на верхнем
+  //: уровне страницы (замер после публикации микрофона).
+  function frameDbTop(an, tbuf) {
+    an.getFloatTimeDomainData(tbuf);
+    var s = 0;
+    for (var i = 0; i < tbuf.length; i++) s += tbuf[i] * tbuf[i];
+    var rms = Math.sqrt(s / tbuf.length);
+    return rms > 1e-8 ? 20 * Math.log10(rms) : -120;
+  }
+
+  function micLevelFact() {
+    try {
+      var ac = actx();
+      if (!ac || !room || !room.localParticipant) return;
+      var pub = null;
+      var pubs = room.localParticipant.trackPublications
+              || room.localParticipant.tracks || new Map();
+      pubs.forEach(function (p) {
+        if (!pub && String(p.source || '') === 'microphone' && p.track) pub = p;
+      });
+      var ms = pub && pub.track && pub.track.mediaStreamTrack;
+      if (!ms) return;
+      var an = ac.createAnalyser();
+      an.fftSize = 2048;
+      var src = ac.createMediaStreamSource(new MediaStream([ms]));
+      src.connect(an);
+      var buf = new Float32Array(an.fftSize), peak = -120, n = 0;
+      var t = setInterval(function () {
+        peak = Math.max(peak, frameDbTop(an, buf));
+        if (++n < 20) return;                 // ~400 мс: окно проверки SDK внутри него
+        clearInterval(t);
+        try { src.disconnect(); } catch (e) {}
+        var proc = !!window.__PROC;
+        console.log('[mic] уровень после публикации: ' + Math.round(peak)
+                    + ' дБ · шумодав=' + (proc ? 'вкл' : 'выкл')
+                    + ' · если SDK в это же окно написал «silence detected», а тут не -120,'
+                    + ' его тревога ЛОЖНАЯ');
+        try { window.__MICDB = peak; } catch (e) {}
+      }, 20);
+    } catch (e) {}
+  }
+
   async function micSet(want, why) {
     if (!room) return false;
     try {
@@ -1419,6 +1550,7 @@
         }, PUB_WAIT_MS);
       })]);
       if (_late) return false;              // до сюда не доходим, но пусть будет явно
+      if (want) micLevelFact();
     } catch (e) {
       // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK, И ОНА МОЖЕТ ДОЕХАТЬ ПОЗЖЕ. Тогда кнопка обязана
       // догнать факт: молча разошедшаяся подпись хуже отказа - человек говорит в
@@ -1458,6 +1590,228 @@
     barLabel(b, micOn ? '🎙' : '🔇', 'Микрофон');
   }
 
+  // ═══ СВОБОДНЫЙ ХОЛСТ: ГДЕ ЛЕЖИТ КАКОЕ ОКНО ═══
+  // ХРАНИМ У СЕБЯ И В ДОЛЯХ, А НЕ В ПИКСЕЛЯХ. Человек открывает комнату с ноутбука и с
+  // планшета, и пиксели с одного экрана на другом кладут окно за край - вернуть его
+  // будет нечем, потому что тащить станет не за что. Доли переносятся.
+  var layFree = {};
+
+  function freeLoad() {
+    try {
+      layFree = JSON.parse(localStorage.getItem('rtc_lay_free') || '{}') || {};
+    } catch (e) { layFree = {}; }
+    if (typeof layFree !== 'object' || !layFree) layFree = {};
+  }
+
+  // ═══ ИМЕНОВАННЫЕ СЛОТЫ РАСКЛАДКИ ═══
+  // ЧТО ХРАНИТСЯ - ДОЛИ И РЕЖИМ, А НЕ КАРТИНКА. Слот, помнящий только координаты, при
+  // загрузке в режиме «сетка» не сделал бы НИЧЕГО: доли там не применяются, и человек
+  // решил бы, что слот пустой. Поэтому режим едет вместе с ними и ставится первым.
+  var slotNames = [];
+
+  function slotsPaint() {
+    var box = document.getElementById('slots');
+    if (!box) return;
+    // КНОПОК НЕТ ТАМ, ГДЕ РАССТАВЛЯТЬ НЕЧЕМ. На мобиле свободной раскладки не бывает
+    // (см. `freeOk`), и «сохранить раскладку» сохраняло бы сетку под именем - то есть
+    // обещало бы то, что не выполнится.
+    box.style.display = freeOk() ? '' : 'none';
+    var lst = document.getElementById('slotlist');
+    if (!lst) return;
+    lst.innerHTML = '';
+    slotNames.forEach(function (nm) {
+      var b = document.createElement('button');
+      b.className = 'chip'; b.textContent = '🔲 ' + nm;
+      b.onclick = function () { slotLoad(nm); };
+      lst.appendChild(b);
+      var x = document.createElement('button');
+      x.className = 'chip'; x.textContent = '✖️';
+      x.title = 'Убрать «' + nm + '»';
+      // ОБРАТНЫЙ ПУТЬ У КАЖДОГО СЛОТА, А НЕ ОДИН НА ВСЕ. Пять заготовок и одна кнопка
+      // «стереть всё» - это не обратный ход, а другая операция.
+      x.onclick = function () { slotDrop(nm); };
+      lst.appendChild(x);
+    });
+  }
+
+  // ПОВОРОТ ПЛАНШЕТА МЕНЯЕТ ОТВЕТ `freeOk`, И РЯД ОБЯЗАН ЗА НИМ ПОЙТИ. Посчитай мы его
+  // один раз при входе - человек, повернувший устройство, остался бы либо с кнопкой,
+  // которая ничего не сохранит, либо без кнопки при рабочем холсте.
+  window.addEventListener('resize', function () {
+    try { slotsPaint(); } catch (e) {}
+  });
+
+  function slotsFrom(res) {
+    if (!res || !res.slots) return;
+    slotNames = [].slice.call(res.slots).map(String);
+    slotsPaint();
+  }
+
+  async function slotSave() {
+    if (!roomAsk) { say('Ещё подключаюсь - слоты будут через секунду.', true); return; }
+    var nm = '';
+    try { nm = prompt('Имя раскладки, например «планёрка»') || ''; } catch (e) {}
+    nm = nm.trim();
+    if (!nm) return;
+    // ШЛЁМ ТО, ЧТО ПРАВДА СТОИТ НА ЭКРАНЕ. Собрать «как должно быть» отдельной формулой
+    // значило бы завести второй ответ на вопрос «где лежат окна» (закон №40).
+    var res = await roomAsk({ kind: 'rtclay', room: ROOM, act: 'lay_save', nm2: nm,
+                             mode: layMode, lay: JSON.stringify(layFree) },
+                            'Сохраняю раскладку…');
+    slotsFrom(res);
+  }
+
+  async function slotLoad(nm) {
+    if (!roomAsk) { say('Ещё подключаюсь - слоты будут через секунду.', true); return; }
+    var res = await roomAsk({ kind: 'rtclay', room: ROOM, act: 'lay_load', nm2: nm },
+                            'Загружаю раскладку…');
+    if (!res || !res.lay) return;                 // причину бот уже назвал сам
+    var lay = null;
+    try { lay = JSON.parse(res.lay); } catch (e) { lay = null; }
+    if (!lay || typeof lay !== 'object') {
+      say('Раскладка «' + nm + '» пришла в непонятном виде - не применяю.', true);
+      return;
+    }
+    // РЕЖИМ ПЕРВЫМ, КООРДИНАТЫ ВТОРЫМИ: иначе доли лягут в память и не применятся, и
+    // тап по слоту выглядел бы как «ничего не произошло».
+    if (res.mode && LAY_NAMES[res.mode]) layMode = freeOk() ? res.mode : 'grid';
+    layFree = lay;
+    freeSave(); laySave(); layPaint();
+    say('Раскладка «' + nm + '»: окон ' + Object.keys(lay).length + '.');
+  }
+
+  async function slotDrop(nm) {
+    if (!roomAsk) return;
+    var res = await roomAsk({ kind: 'rtclay', room: ROOM, act: 'lay_drop', nm2: nm },
+                            'Убираю раскладку…');
+    slotsFrom(res);
+  }
+
+  function freeSave() {
+    try { localStorage.setItem('rtc_lay_free', JSON.stringify(layFree)); } catch (e) {}
+  }
+
+  //: КЛЮЧ ОКНА. Для видео это участник (или «@me»), для крипто-панели - её имя. Ключ
+  //: обязан пережить перезаход, поэтому берётся от СУЩНОСТИ, а не от порядка в списке:
+  //: порядок меняется при каждом входе-выходе, и раскладка уехала бы к соседу.
+  function freeKey(el) {
+    if (!el) return '';
+    if (el.id === 'crypto') return '@crypto';
+    return el.dataset.pid || (el.dataset.me === '1' ? '@me' : '');
+  }
+
+  //: РАСКЛАДКА ПО УМОЛЧАНИЮ - ЛЕСЕНКОЙ, А НЕ СТОПКОЙ. Положи мы все окна в одну точку,
+  //: человек увидел бы ОДНО окно и решил, что остальные пропали.
+  function freeDefault(i) {
+    var step = 0.06 * (i % 5);
+    return { x: 0.04 + step, y: 0.04 + step, w: 0.46, h: 0.42 };
+  }
+
+  //: ОКНА ХОЛСТА = ВИДЕО + КРИПТО-ПАНЕЛЬ. Список собирается в ОДНОМ месте: разойдись
+  //: он с тем, что реально лежит в контейнере, - часть окон осталась бы неподвижной, и
+  //: выглядело бы это как «у меня не таскается вот это».
+  function freeEls() {
+    var out = [];
+    vids.forEach(function (r) { out.push(r.el); });
+    var cr = $('crypto');
+    if (cr && cr.style.display !== 'none' && cr.parentNode === $('screens')) out.push(cr);
+    return out;
+  }
+
+  function freeApply() {
+    var box = $('screens');
+    var W = box.clientWidth || 1, H = box.clientHeight || 1;
+    freeEls().forEach(function (el, i) {
+      var k = freeKey(el);
+      var r = (k && layFree[k]) || freeDefault(i);
+      // ПОТОЛКИ И ПОЛЫ НЕ УКРАШЕНИЕ: без нижнего окно схлопывается в ноль и тянуть его
+      // станет не за что, без верхнего оно уезжает за холст и теряется целиком.
+      var w = Math.max(0.12, Math.min(1, r.w || 0.46));
+      var h = Math.max(0.12, Math.min(1, r.h || 0.42));
+      var x = Math.max(0, Math.min(1 - w, r.x || 0));
+      var y = Math.max(0, Math.min(1 - h, r.y || 0));
+      el.style.left = (x * W) + 'px';
+      el.style.top = (y * H) + 'px';
+      el.style.width = (w * W) + 'px';
+      el.style.height = (h * H) + 'px';
+      freeGrip(el);
+    });
+  }
+
+  //: ОДНА РУЧКА НА ОКНО. Вешаем ОДИН РАЗ и метим сам элемент: `layPaint` зовётся на
+  //: каждое событие комнаты, и без метки на окне за час созвона накопились бы сотни
+  //: обработчиков на одном и том же уголке.
+  function freeGrip(el) {
+    if (el.dataset.freewired === '1') return;
+    el.dataset.freewired = '1';
+    var g = document.createElement('div');
+    g.className = 'wgrip';
+    g.title = 'Тяни за угол - размер. Двойной тап по заголовку - вернуть окно на место';
+    el.appendChild(g);
+    freeDrag(g, el, 'size');
+    var head = el.querySelector('.vnm');
+    if (!head && el.id === 'crypto') {
+      head = document.createElement('span');
+      head.className = 'vnm';
+      head.textContent = '📈 График и доска';
+      el.insertBefore(head, el.firstChild);
+    }
+    if (head) {
+      freeDrag(head, el, 'move');
+      // ═══ ОБРАТНЫЙ ПУТЬ У КАЖДОГО ОКНА, А НЕ ТОЛЬКО У ВСЕЙ РАСКЛАДКИ (закон №55) ═══
+      // «Авто» сбрасывает ВСЁ; двойной тап возвращает на место ОДНО, которое человек
+      // только что уронил за край. Без него единственный выход - снести и свою работу.
+      head.addEventListener('dblclick', function () {
+        var k = freeKey(el);
+        if (k) { delete layFree[k]; freeSave(); }
+        freeApply();
+        say('Вернул это окно на место.');
+      });
+    }
+  }
+
+  //: ТАЩИМ И ТЯНЕМ ОДНИМ КОДОМ. `pointer`-события покрывают мышь и палец сразу; два
+  //: обработчика разошлись бы на первой правке (закон №40).
+  function freeDrag(handle, el, kind) {
+    var from = null, base = null;
+    handle.addEventListener('pointerdown', function (e) {
+      if (layMode !== 'free') return;
+      var box = $('screens');
+      var br = box.getBoundingClientRect();
+      var r = el.getBoundingClientRect();
+      from = { x: e.clientX, y: e.clientY, W: br.width || 1, H: br.height || 1 };
+      base = { x: (r.left - br.left) / from.W, y: (r.top - br.top) / from.H,
+               w: r.width / from.W, h: r.height / from.H };
+      try { handle.setPointerCapture(e.pointerId); } catch (e2) {}
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    handle.addEventListener('pointermove', function (e) {
+      if (!from) return;
+      var dx = (e.clientX - from.x) / from.W, dy = (e.clientY - from.y) / from.H;
+      var r;
+      if (kind === 'move') {
+        r = { x: base.x + dx, y: base.y + dy, w: base.w, h: base.h };
+      } else {
+        r = { x: base.x, y: base.y,
+              w: Math.max(0.12, base.w + dx), h: Math.max(0.12, base.h + dy) };
+      }
+      r.w = Math.min(1, r.w); r.h = Math.min(1, r.h);
+      r.x = Math.max(0, Math.min(1 - r.w, r.x));
+      r.y = Math.max(0, Math.min(1 - r.h, r.y));
+      var k = freeKey(el);
+      if (k) layFree[k] = r;
+      freeApply();
+    });
+    function done() {
+      if (!from) return;
+      from = null;
+      freeSave();
+    }
+    handle.addEventListener('pointerup', done);
+    handle.addEventListener('pointercancel', done);
+  }
+
   function layPaint() {
     var box = $('screens');
     var n = vids.length;
@@ -1466,8 +1820,40 @@
     // ЗАКРЕПЛЁННОЕ ОКНО СИЛЬНЕЕ ПРАВИЛА «АВТО»: человек сказал, что смотреть крупно, и
     // переспрашивать его каждый раз, когда заговорил сосед, - это спорить с ним.
     var mode = layMode;
+    // ═══ СВОБОДНЫЙ ХОЛСТ ТОЛЬКО ТАМ, ГДЕ ЕСТЬ ЧЕМ ТАЩИТЬ ═══
+    // На мобиле его нет, и режим тихо становится сеткой: оставить его значило бы дать
+    // кнопку, после которой окна разъезжаются в кашу и вернуть их пальцем нечем.
+    if (mode === 'free' && !freeOk()) mode = 'grid';
     if (mode === 'auto') mode = layPin ? 'spk' : (n >= 2 ? 'grid' : 'one');
-    box.className = (mode === 'grid') ? 'grid' : (mode === 'spk' ? 'spk' : '');
+    box.className = (mode === 'grid') ? 'grid'
+                  : (mode === 'spk' ? 'spk' : (mode === 'free' ? 'free' : ''));
+    if (mode === 'free') {
+      // КРИПТО-ПАНЕЛЬ ПЕРЕЕЗЖАЕТ НА ХОЛСТ. Иначе «доска и график» осталась бы
+      // единственным, что нельзя подвинуть, - холст был бы наполовину свободным.
+      var _cr = $('crypto');
+      if (_cr && _cr.style.display !== 'none' && _cr.parentNode !== box) {
+        _cr.dataset.homeparent = '1';
+        box.appendChild(_cr);
+      }
+      vids.forEach(function (r) {
+        r.el.classList.remove('big'); r.el.classList.remove('small');
+        r.el.classList.remove('pinned');
+      });
+      var _sp0 = document.getElementById('vgrip');
+      if (_sp0) _sp0.remove();
+      freeApply();
+    } else {
+      // ВОЗВРАТ ПАНЕЛИ НА МЕСТО - ОБЯЗАТЕЛЬНАЯ ПОЛОВИНА (закон №55): уехав на холст и
+      // не вернувшись, она пропала бы с экрана при первом же переключении раскладки.
+      var _cr2 = $('crypto');
+      if (_cr2 && _cr2.dataset.homeparent === '1') {
+        delete _cr2.dataset.homeparent;
+        _cr2.removeAttribute('style');
+        _cr2.style.display = '';
+        var _anchor = $('port');
+        if (_anchor && _anchor.parentNode) _anchor.parentNode.insertBefore(_cr2, _anchor);
+      }
+    }
     if (mode === 'spk') {
       // КРУПНО - ЗАКРЕПЛЁННЫЙ, А ЕСЛИ ЕГО НЕТ - ТОТ, КТО ГОВОРИТ. Молчат все - первый:
       // пустое место вместо картинки читается как поломка.
@@ -2325,37 +2711,56 @@
 
   //: -> сыграл ли. Отвечаем ФАКТОМ, а не намерением: не поднялся контекст - вызывающий
   //: обязан знать, что человек ничего не услышал, и показать событие глазами.
+  //: СКОЛЬКО ЖДЁМ ФАЙЛ, ПРЕЖДЕ ЧЕМ ЗАМЕНИТЬ ЕГО СИНТЕЗОМ. Меньше - тап звучит синтезом
+  //: там, где файл вот-вот приедет; больше - человек успевает решить, что кнопка мёртвая.
+  var SND_WAIT_MS = 350;
+
+  function sndFromBuffer(ac, buf) {
+    try {
+      var src = ac.createBufferSource();
+      src.buffer = buf; src.connect(_MASTER);
+      src.start(ac.currentTime + 0.02);
+      return true;
+    } catch (e) { return false; }
+  }
+
   function playSnd(id) {
     var s = SOUNDS[id];
     if (!s) return false;
     var ac = actx();
     if (!ac) return false;
-    if (SND_BUF[id]) {
-      try {
-        var src = ac.createBufferSource();
-        src.buffer = SND_BUF[id];
-        src.connect(_MASTER);
-        src.start(ac.currentTime + 0.02);
-        return true;
-      } catch (e) { /* дальше синтезом */ }
-    }
+    if (SND_BUF[id] && sndFromBuffer(ac, SND_BUF[id])) return true;
     //: ВТОРОЙ ПУТЬ РАВНОПРАВЕН ПЕРВОМУ: файл, который не берёт WebAudio, но играет
     //: медиа-элемент, - это ТОТ ЖЕ файл, а не «почти получилось».
     if (sndPlayEl(id)) return true;
     if (SND_FILES === null) sndBoot();      // первый звук до загрузки манифеста
-    if (SND_FILES && SND_FILES.indexOf(id) >= 0
-        && SND_BUF[id] === undefined && !SND_DEAD[id]) {
-      // ФАЙЛ ЕСТЬ, НО ЕЩЁ НЕ ЗАГРУЖЕН: тянем и играем, когда приедет. Ждать его молча
-      // нельзя - человек тапнул и обязан услышать хоть что-то в эту же секунду.
+    // ═══ СИНТЕЗ - ЗАПАСНОЙ ПУТЬ, А НЕ ПАРАЛЛЕЛЬНЫЙ (живой отказ Ren 31.08) ═══
+    // СИМПТОМ БЫЛ ТОЧНЫЙ: у соседей играет файл, у САМОГО нажавшего - старый синтез.
+    // Дверь при этом ОДНА (`playSnd` зовут оба пути), а расходились они ВНУТРИ неё:
+    // буфер ещё не загружен -> мы запускали загрузку И ТУТ ЖЕ проваливались в синтез.
+    // У нажавшего это первые секунды после входа (преднагрузка не успела), у соседей
+    // сигнал приходит позже - и к тому моменту файл уже готов. Один и тот же тап звучал
+    // по-разному на разных экранах.
+    // ТЕПЕРЬ ФАЙЛ ИМЕЕТ ПРАВО ОПОЗДАТЬ НА `SND_WAIT_MS`, и синтез включается ТОЛЬКО если
+    // он не успел: тишины в ответ на тап нет, а расхождение исчезает по построению.
+    var known = !!(SND_FILES && SND_FILES.indexOf(id) >= 0) && !SND_DEAD[id];
+    if (known) {
+      var done = false;
       sndLoad(ac, id).then(function (b) {
-        if (!b) { sndPlayEl(id); return; }
-        try {
-          var s2 = ac.createBufferSource();
-          s2.buffer = b; s2.connect(_MASTER); s2.start(ac.currentTime + 0.01);
-        } catch (e) {}
+        if (done) return;                    // синтез уже отыграл - второй звук не нужен
+        done = true;
+        if (b) { sndFromBuffer(ac, b); return; }
+        sndPlayEl(id);
       });
+      setTimeout(function () {
+        if (done) return;
+        done = true;
+        if (!s.p) return;
+        try { s.p(ac, actx().currentTime + 0.02); } catch (e) {}
+      }, SND_WAIT_MS);
+      return true;
     }
-    if (!s.p) return SND_BUF[id] !== undefined;
+    if (!s.p) return false;
     try { s.p(ac, ac.currentTime + 0.02); } catch (e) { return false; }
     return true;
   }
@@ -3268,13 +3673,11 @@ registerProcessor('rnn-denoise', RnnProc);
     // мобиле опиралось бы на один фон, а отчёт «-14 дБ» на другой (закон №40).
     function newStat() { return { all: [], db: [], low: [] }; }
 
-    function frameDb(an, tbuf) {
-      an.getFloatTimeDomainData(tbuf);
-      var s = 0;
-      for (var i = 0; i < tbuf.length; i++) s += tbuf[i] * tbuf[i];
-      var rms = Math.sqrt(s / tbuf.length);
-      return rms > 1e-8 ? 20 * Math.log10(rms) : -120;
-    }
+    // ТЕЛО ПЕРЕЕХАЛО НАВЕРХ (`frameDbTop`): его зовёт и замер уровня микрофона, который
+    // живёт на верхнем уровне страницы. Оставить его здесь значило бы завести ШЕСТОЙ
+    // случай «объявлено внутри, зовётся снаружи» - ровно тот класс, что уже пять раз
+    // уносил половину страницы ReferenceError'ом.
+    var frameDb = frameDbTop;
 
     // ДОЛЯ ЭНЕРГИИ В 100-1000 Гц - ЭТО НЕ УКРАШЕНИЕ ОТЧЁТА, А ПРИЗНАК «МЕШАЕТ РЕЧИ».
     // Шум, лежащий выше 4 кГц, человек слышит как шипение и разбирать речь оно почти не
@@ -3841,6 +4244,8 @@ registerProcessor('rnn-denoise', RnnProc);
     // цена расхождения - висящая дорожка, которую видно СОСЕДЯМ, а не нам.
     function toggler(btn, kind, offIcon, word) {
       var live = false;
+      //: ЧЕМ ОТМЕНИТЬ ОЖИДАНИЕ ОКНА ВЫБОРА. Пока не ждём - null, и тап идёт обычным путём.
+      var pickAbort = null;
       // ПОДПИСЬ И КЛАСС - ОДНОЙ ДВЕРЬЮ, ИЗ `live`. Пока их ставили по местам, ветка
       // отказа забывала их вернуть, и кнопка показывала «идёт показ» над мёртвой
       // дорожкой (живой отказ Ren).
@@ -3991,6 +4396,58 @@ registerProcessor('rnn-denoise', RnnProc);
         }
       }
 
+      // ═══ СТАДИЯ НАЗЫВАЕТСЯ ВСЛУХ, ИНАЧЕ СЛЕДУЮЩИЙ ЖИВОЙ ПРОГОН СНОВА НЕ ОТВЕТИТ ═══
+      // Шесть кругов подряд разбор упирался в одно: «залипло, и непонятно, где». Стадий
+      // всего три (запросил экран -> поток получен -> опубликовано), и та, на которой
+      // встало, отвечает на вопрос сразу: нет второй - молчит `getDisplayMedia` (диалог
+      // не открылся), нет третьей - молчит `publishTrack` (держит SDK).
+      // ИМЯ СВОЁ, А НЕ `stage`: наверху уже живёт `stage()` - сторож ЗАГРУЗКИ страницы,
+      // и второе имя того же вида читателю неразличимо, а при удалении внутреннего
+      // вызовы молча поехали бы в чужой сторож и испортили бы его диагностику
+      // (закон №26: локальное имя не совпадает с модульным). Поймал собственный `rtc17`.
+      function showStage(what) {
+        try { console.log('[показ] ' + what); } catch (e) {}
+        try { window.__STAGE = (window.__STAGE || []); window.__STAGE.push(what); } catch (e) {}
+      }
+
+      // ═══ ДИАЛОГ НЕ ОТКРЫЛСЯ - ГОВОРИМ ЭТО И ДАЁМ ВЫХОД ═══
+      // ФАКТ (живой прогон Ren 31.08, две точки): при свежем заходе в Telegram WebView
+      // диалог появляется, ПОСЛЕ включённой камеры - нет вовсе. Значит поддержка есть, а
+      // ломается сочетание; из кода этого не установить (закон №48), но молчать нельзя.
+      // Называем ОБА выхода: выключить камеру и попробовать снова, либо открыть комнату в
+      // обычном браузере - там показ работает (тот же прогон).
+      function sayNoPicker() {
+        var camOn = false;
+        try {
+          camOn = !!(document.getElementById('cam')
+                     && document.getElementById('cam').classList.contains('on'));
+        } catch (e) {}
+        var t = 'Окно выбора экрана не открылось.';
+        t += camOn
+          ? ' В Telegram оно не появляется, когда уже включена камера: выключи камеру и'
+            + ' нажми «Экран» ещё раз.'
+          : ' В Telegram это иногда не срабатывает.';
+        t += ' Надёжный путь - открыть комнату в обычном браузере, там показ работает.';
+        say(t, true);
+        showBrowserWay();
+      }
+
+      // ССЫЛКА В БРАУЗЕР - КНОПКОЙ, А НЕ СОВЕТОМ «СКОПИРУЙ АДРЕС». Внутри Telegram адрес
+      // страницы человеку недоступен вовсе: адресной строки там нет.
+      function showBrowserWay() {
+        var box = document.getElementById('browserway');
+        if (!box) return;
+        box.style.display = '';
+        box.onclick = function () {
+          var u = location.href;
+          // `openLink` уводит в СИСТЕМНЫЙ браузер; без SDK остаётся обычный переход.
+          try {
+            if (tg && tg.openLink) { tg.openLink(u, { try_instant_view: false }); return; }
+          } catch (e) {}
+          try { window.open(u, '_blank'); } catch (e) { location.href = u; }
+        };
+      }
+
       async function startShow(gotStream) {
         var lost = false, pub = null;
         // ═══ ПОКАЗ УЖЕ ИДЁТ - ГОВОРИМ ЭТО, А НЕ МОЛЧИМ ═══
@@ -4014,20 +4471,52 @@ registerProcessor('rnn-denoise', RnnProc);
           }
         }
         var stream = null;
-        try {
-          // ═══ ВЫБОР ОКНА ЧЕЛОВЕКОМ НЕ ОГРАНИЧИВАЕТСЯ ПОТОЛКОМ, И ЭТО НЕ ПОБЛАЖКА ═══
-          // Он может искать нужную вкладку минуту, и это ЗАКОННО. Накрой мы его сторожем
-          // в 25 с - получили бы «ни ответа, ни отказа» на человеке, который просто
-          // выбирает. Сторож ниже стоит на ПУБЛИКАЦИИ, где ждём мы, а не он.
-          if (kind === 'screen') stream = await gotStream;
-        } catch (e) {
-          // ОТМЕНА - НЕ ПОЛОМКА: человек передумал, и говорить надо ровно это.
-          live = false;
-          var _cancel = (e && (e.name === 'NotAllowedError' || e.name === 'AbortError'));
-          say(_cancel ? 'Показ отменён - окно не выбрано.'
-                      : 'Экран взять не вышло (' + (e && e.name || 'ошибка') + '): '
-                        + (e && e.message || e), true);
-          return;
+        if (kind === 'screen') {
+          showStage('запросил экран');
+          // МЯГКАЯ ПОДСКАЗКА НИЧЕГО НЕ ОТМЕНЯЕТ: она отвечает на вопрос «а оно вообще
+          // работает?», который человек задаёт себе на седьмой секунде тишины.
+          var _hint = setTimeout(function () {
+            if (live) return;
+            say('Жду окно выбора экрана. Если диалог не появился - смотри ниже.', true);
+          }, SCREEN_HINT_MS);
+          var _late = false, _quit = false;
+          // ПОКА ЖДЁМ ДИАЛОГ, КНОПКА ЖИВА И НАЗЫВАЕТ, ЧТО СДЕЛАЕТ ТАП.
+          btn.disabled = false;
+          barLabel(btn, '✖️', 'Отменить');
+          try {
+            stream = await Promise.race([gotStream, new Promise(function (_, rej) {
+              pickAbort = function () {
+                _quit = true;
+                rej(new Error('ожидание окна выбора отменено'));
+              };
+              setTimeout(function () {
+                _late = true;
+                rej(new Error('окно выбора экрана так и не открылось'));
+              }, SCREEN_PICK_MS);
+            })]);
+            pickAbort = null; btn.disabled = true; paint();
+            clearTimeout(_hint);
+            showStage('поток получен: дорожек ' + (stream.getTracks ? stream.getTracks().length : '?'));
+          } catch (e) {
+            pickAbort = null; btn.disabled = true;
+            clearTimeout(_hint);
+            live = false;
+            // ПОТОК, ПРИШЕДШИЙ ПОЗЖЕ НАШЕЙ СДАЧИ, ГАСИМ - НО ТОЛЬКО КОГДА ОН ПРАВДА
+            // ПРИШЁЛ. Прежняя редакция гасила его в общем `catch`, то есть могла убить
+            // ЖИВОЙ захват, публикация которого ещё шла (подозрение Ren - верное).
+            try {
+              gotStream.then(function (st) {
+                try { st.getTracks().forEach(function (t) { t.stop(); }); } catch (e2) {}
+              }, function () {});
+            } catch (e3) {}
+            var _cancel = (e && (e.name === 'NotAllowedError' || e.name === 'AbortError'));
+            if (_quit) { say('Отменил ожидание окна выбора.', true); return; }
+            if (_cancel) { say('Показ отменён - окно не выбрано.', true); return; }
+            if (_late) { sayNoPicker(); return; }
+            say('Экран взять не вышло (' + (e && e.name || 'ошибка') + '): '
+                + (e && e.message || e), true);
+            return;
+          }
         }
         try {
           pub = (kind === 'screen')
@@ -4038,6 +4527,7 @@ registerProcessor('rnn-denoise', RnnProc);
             // реджектится. `publishTrack` ничего не захватывает и жеста не требует.
             ? publishScreen(stream)
             : room.localParticipant.setCameraEnabled(true);
+          if (kind === 'screen') showStage('публикую дорожки');
           await Promise.race([pub, new Promise(function (_, rej) {
             setTimeout(function () {
               lost = true;
@@ -4052,6 +4542,7 @@ registerProcessor('rnn-denoise', RnnProc);
             }, PUB_WATCHDOG_MS);
           })]);
           live = true; say('');
+          if (kind === 'screen') showStage('опубликовано');
         } catch (e) {
           if (lost) {
             // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
@@ -4059,9 +4550,13 @@ registerProcessor('rnn-denoise', RnnProc);
             // НО ЖДЁМ ОГРАНИЧЕННО: этот вызов встаёт в очередь ЗА висящей операцией и
             // виснет вместе с ней, а мы после него обязаны вернуть человеку кнопку.
             // Именно здесь и залипало (живой отказ Ren 30.08).
-            try { await sdkOff(4000); } catch (e2) {}
-            // А ЕСЛИ ОНА ВСЁ-ТАКИ ДОЕДЕТ ПОЗЖЕ - СНИМАЕМ И ЕЁ. Иначе человек показывает
-            // экран, будучи уверенным, что не показывает, и выключить нечем.
+            // ═══ СТОРОЖ ПОЗДНЕЙ ПУБЛИКАЦИИ ВЗВОДИТСЯ ДО ОЖИДАНИЯ, А НЕ ПОСЛЕ ═══
+            // ПОРЯДОК ЗДЕСЬ - ЧАСТЬ ПРАВИЛА, И ПРЕЖНИЙ БЫЛ НЕВЕРЕН. `sdkOff(4000)` ждёт
+            // до четырёх секунд, и публикация может доехать РОВНО В ЭТО ОКНО: обработчик,
+            // навешенный после, к тому моменту ещё не существует. Промис при этом уже
+            // разрешён, и `.then` на нём сработает - но на четыре секунды позже, а всё
+            // это время соседи видят картинку, которую человек считает выключенной.
+            // Взводим первым: `.then` на ещё не разрешённом промисе ничего не стоит.
             try {
               pub.then(function () {
                 if (live) return;
@@ -4070,12 +4565,17 @@ registerProcessor('rnn-denoise', RnnProc);
                 say('Дорожка доехала уже после отказа - снял её. Попробуй ещё раз.', true);
               }, function () {});
             } catch (e4) {}
+            // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
+            // методом, которым включали: только он умеет снять состояние «публикуется».
+            try { await sdkOff(4000); } catch (e2) {}
           }
           stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
-          // ВЗЯТЫЙ, НО НЕ ОПУБЛИКОВАННЫЙ ПОТОК `stopLocalMedia` НЕ ВИДИТ: он ходит по
-          // публикациям LiveKit, а этой дорожки там ещё нет. Оставь мы её - у человека
-          // горит «идёт доступ к экрану» над комнатой, где показа нет.
-          if (stream && stream.getTracks) {
+          // ═══ ВЗЯТЫЙ ПОТОК ГАСИМ, ТОЛЬКО КОГДА ПУБЛИКАЦИЯ ТОЧНО НЕ СОСТОИТСЯ ═══
+          // ПОДОЗРЕНИЕ REN БЫЛО ВЕРНЫМ: на пути СТОРОЖА (`lost`) публикация ещё ИДЁТ и
+          // может доехать, а мы уже гасили дорожку - то есть сами убивали живой захват и
+          // делали повторную попытку заведомо бессмысленной. Теперь на этом пути поток
+          // остаётся, а поздно доехавшую публикацию снимает `pub.then` выше.
+          if (!lost && stream && stream.getTracks) {
             try { stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e5) {} }); }
             catch (e6) {}
           }
@@ -4095,7 +4595,22 @@ registerProcessor('rnn-denoise', RnnProc);
         // livekit-client ждёт незавершённую операцию и падает «waiting for pending
         // publication promise timed out»; нетерпеливый двойной тап по «Показать экран»
         // воспроизводит это без всякого таймаута.
+        // ═══ ТАП ВО ВРЕМЯ ОЖИДАНИЯ ОКНА ВЫБОРА - ЭТО ОТМЕНА, А НЕ МЁРТВАЯ КНОПКА ═══
+        // Пока мы ждём диалог, кнопка ЖИВА и подписана «Отменить»: человек, у которого
+        // диалог не открылся, не должен сидеть перед серой кнопкой и гадать. Живой отказ
+        // Ren 31.08 был ровно про это ощущение («кнопка залипает»).
+        if (pickAbort) { pickAbort(); return; }
         if (btn.disabled) return;
+        // ═══ СВОЯ ПУБЛИКАЦИЯ ЕЩЁ В ПОЛЁТЕ - НЕ СТАКАЕМ ВТОРУЮ ═══
+        // Это и есть исходный механизм: у SDK публикация сериализуется на участника, и
+        // вторая операция ждёт первую. Мы эти операции сами и запускаем, значит гадать не
+        // нужно - знаем точно. Молча встать в очередь значило бы повторить ту же западню.
+        if (PUB_BUSY && PUB_BUSY !== word) {
+          say('Сейчас включается ' + PUB_BUSY.toLowerCase() + ' - дождись и нажми «'
+              + word + '» ещё раз. Два включения разом клиент не тянет: второе встаёт в '
+              + 'очередь за первым и может не дождаться.', true);
+          return;
+        }
         // ═══ ЗАПРОС ЭКРАНА - ПЕРВОЕ ДЕЙСТВИЕ ТАПА, ДО ЕДИНОГО `await` ═══
         // Жест человека живёт ровно до первого ожидания (см. `grabScreen`). Здесь мы ещё
         // ВНУТРИ жеста, поэтому берём поток сами; всё остальное - `btn.disabled`,
@@ -4125,12 +4640,14 @@ registerProcessor('rnn-denoise', RnnProc);
               + 'состояние у себя я вернул.', true);
         }, PUB_WAIT_MS + 4000);
         try {
+          PUB_BUSY = word;
           if (live) await stopShow(); else await startShow(_screen);
         } catch (e) {
           // СЮДА ПОПАДАТЬ НЕ ДОЛЖНЫ - но если попали, кнопка обязана ожить всё равно.
           say('Не вышло: ' + (e && e.message || e), true);
         } finally {
           // ═══ КНОПКА ВОЗВРАЩАЕТСЯ В СОСТОЯНИЕ, СООТВЕТСТВУЮЩЕЕ `live`, ВСЕГДА ═══
+          if (PUB_BUSY === word) PUB_BUSY = '';
           clearTimeout(_wake);
           paint();
           btn.disabled = false;
@@ -4213,6 +4730,17 @@ registerProcessor('rnn-denoise', RnnProc);
     //: комнаты живёт именно там.
     roomSend = send;
     roomLabel = myLabel;
+    roomAsk = ask;
+    //: СПИСОК СЛОТОВ СПРАШИВАЕМ ОДИН РАЗ, ПОСЛЕ ПОДКЛЮЧЕНИЯ. Раньше кнопок нет, потому
+    //: что нет двери, - и это честнее пустого ряда, который потом наполнится.
+    (function () {
+      var b = document.getElementById('slotsave');
+      if (b) b.onclick = slotSave;
+      slotsPaint();
+      if (!freeOk()) return;              // на мобиле слотов нет вовсе - незачем и спрашивать
+      ask({ kind: 'rtclay', room: ROOM, act: 'lay_list' }, 'Смотрю сохранённые раскладки…')
+        .then(slotsFrom).catch(function () {});
+    })();
     function nameOf(p) {
       var rec = people[p.identity];
       return (rec && rec.name && !rec.me) ? rec.name : human(p.name, p.identity);
@@ -4396,6 +4924,43 @@ registerProcessor('rnn-denoise', RnnProc);
                 ['DXY', 'TVC:DXY'], ['GOLD', 'TVC:GOLD']];
     var TFS = [['5м', '5'], ['15м', '15'], ['1ч', '60'], ['4ч', '240'], ['D', 'D']];
     var chSym = '', chTf = '60', chBy = '', chOpen = false;
+    //: ═══ ЧТО ИМЕННО ПОКАЗАНО КОМНАТЕ: ВИДЖЕТ - ОБЩИЙ, КАК И СИМВОЛ ═══
+    //: Локальным его делать нельзя: смысл общего холста в том, что все смотрят ОДНО и
+    //: то же, и «у меня Fear&Greed, у тебя график» превратило бы разговор в переспрос.
+    //: ЧУЖИЕ ДОМЕНА ТОЛЬКО ОФИЦИАЛЬНЫМ EMBED. DexScreener НЕ БЕРЁМ: официального embed у
+    //: них нет, а ToS запрещает derivative use - то есть это не «сложно», а нельзя.
+    //: ═══ X-FRAME-OPTIONS ЗАКРЫТ ЗАМЕРОМ REN С ПРОДА 31.08, А НЕ ДОКУМЕНТАЦИЕЙ ═══
+    //:   geckoterminal.com     - заголовка нет, фрейм разрешён;
+    //:   embed.polymarket.com  - заголовка нет, фрейм разрешён;
+    //:   alternative.me        - `x-frame-options: SAMEORIGIN`, САЙТ во фрейм НЕ ВСТАНЕТ.
+    //: Отсюда у индекса страха `kind: 'img'`, и это не упрощение: под X-Frame-Options
+    //: изображения не попадают вовсе, картинка отдаёт 200 image/png.
+    //: МЕХАНИЗМ ОТКАЗА ОСТАЁТСЯ, И ЭТО НЕ ПЕРЕСТРАХОВКА: политика чужого домена может
+    //: смениться в любой день, а узнаем мы об этом от человека. Не загрузилось за
+    //: `WGT_WAIT_MS` - говорим словами и предлагаем открыть у них; молчаливый пустой
+    //: прямоугольник читался бы как «комната сломалась».
+    var WIDGETS = {
+      tv: { nm: '📈 График', kind: 'tv' },
+      gt: { nm: '🦎 GeckoTerminal', kind: 'frame',
+            url: function (v) { return 'https://www.geckoterminal.com/' + v + '?embed=1'; },
+            hint: 'сеть/pools/адрес, например eth/pools/0x88e6…' },
+      // ═══ ИНДЕКС СТРАХА - КАРТИНКОЙ, И ЭТО НЕ ВЫБОР, А ФАКТ ПЛОЩАДКИ ═══
+      // ЖИВОЙ ЗАМЕР REN 31.08: у `alternative.me` стоит `x-frame-options: SAMEORIGIN`,
+      // то есть САЙТ во фрейм не встанет ни при каком старании. А сама картинка отдаёт
+      // 200 image/png - под X-Frame-Options изображения не попадают вовсе. Отсюда
+      // `kind: 'img'`: не «так проще», а единственный способ, которым это работает.
+      // СВОЕГО ОБХОДА КЭША НЕ ДЕЛАЕМ: тот же замер показал `no-cache` у источника, то
+      // есть браузер и так перепроверяет картинку перед показом. Наш `?v=<время>` делал
+      // из каждого показа НОВЫЙ адрес и отменял условный запрос (304) - то есть качал
+      // полный файл там, где сервер и так гарантирует свежесть.
+      fg: { nm: '😱 Индекс страха', kind: 'img',
+            url: function () { return 'https://alternative.me/crypto/fear-and-greed-index.png'; } },
+      pm: { nm: '🎲 Polymarket', kind: 'frame',
+            url: function (v) { return 'https://embed.polymarket.com/market.html?market=' + encodeURIComponent(v); },
+            hint: 'slug рынка' }
+    };
+    var WGT_WAIT_MS = 8000;
+    var wgt = 'tv', wgtVal = '', wgtBy = '';
     //: ЧЕЛОВЕК ЗАКРЫЛ ПАНЕЛЬ САМ - ЭТО РЕШЕНИЕ, А НЕ СЛУЧАЙНОСТЬ. Без этого признака
     //: «закрыто» и «ещё не открывал» неразличимы, и чужой график распахивал бы её снова.
     var chShut = false;
@@ -4410,6 +4975,18 @@ registerProcessor('rnn-denoise', RnnProc);
     function tfOk(x) {
       var v = String(x || '').toUpperCase().slice(0, 4);
       return /^(1|3|5|15|30|60|120|240|D|W|M)$/.test(v) ? v : '';
+    }
+    //: ЗНАЧЕНИЕ ВИДЖЕТА - ЧАСТЬ ЧУЖОГО АДРЕСА, И ЭТО САМОЕ ОПАСНОЕ МЕСТО ЭТОЙ ФИЧИ.
+    //: Строку пишет сосед, а подставляется она в `src` фрейма: пусти мы её как есть,
+    //: он подставил бы что угодно, включая другой домен целиком. Разрешено ровно то,
+    //: из чего состоят настоящие пути (`eth/pools/0x88e6…`, slug рынка), - ни двоеточия,
+    //: ни двух точек подряд, ни ведущего слэша (`//чужой.домен` браузер прочитал бы как
+    //: смену хоста).
+    function wgtValOk(x) {
+      var v = String(x || '').trim().slice(0, 120);
+      if (!/^[A-Za-z0-9][A-Za-z0-9_\-\/]*$/.test(v)) return '';
+      if (v.indexOf('//') >= 0) return '';
+      return v;
     }
 
     // ═══ ВИДЖЕТ ПЕРЕСОБИРАЕТСЯ ТОЛЬКО КОГДА МЕНЯЮТСЯ ЕГО ВХОДЫ ═══
@@ -4429,8 +5006,18 @@ registerProcessor('rnn-denoise', RnnProc);
       $('chart').classList.toggle('on', chOpen);
       if (!chOpen) return;
       paintSymBtns();
+      // ═══ НЕ TradingView - РИСУЕМ СВОЙ ВИДЖЕТ И ВЫХОДИМ ═══
+      // Ветка стоит ЗДЕСЬ, а не отдельной функцией у кнопки: панель перерисовывается на
+      // каждое сердцебиение владельца, и виджет обязан пережить это так же, как график.
+      if (wgt !== 'tv') { wgtPaint(box); return; }
       var want = chSym ? (chSym + '|' + chTf) : '';
-      if (want !== chBuilt) {
+      // ═══ ПУСТО ПОСЛЕ ЧУЖОГО ВИДЖЕТА - ЭТО НЕ «НИЧЕГО НЕ МЕНЯЛОСЬ» ═══
+      // ЖИВОЙ КЛАСС, НАЙДЕННЫЙ ПРОБОЙ: `wgtPaint` сбрасывает `chBuilt` в '', и при
+      // возврате к графику БЕЗ выбранной пары `want` тоже '' - условие не выполнялось, и
+      // картинка Fear&Greed оставалась в коробке НАВСЕГДА. То есть виджет включался и не
+      // выключался - ровно тот класс, ради которого записан закон №55. Метка `null`
+      // означает «в коробке чужое, пересобрать», и с пустой строкой она не совпадает.
+      if (want !== chBuilt || chBuilt === null) {
         // ХОЛСТ ПЕРЕЖИВАЕТ ПЕРЕСОЗДАНИЕ ГРАФИКА: он лежит В ТОЙ ЖЕ коробке, и снеси мы её
         // целиком - вместе с чужим графиком стёрлись бы все чужие штрихи.
         var keep = $('draw');
@@ -4465,6 +5052,128 @@ registerProcessor('rnn-denoise', RnnProc);
       // ПОДПИСЬ ОБНОВЛЯЕТСЯ ВСЕГДА - ОНА ДЕШЁВАЯ И МЕНЯЕТСЯ ЧАЩЕ ГРАФИКА (кто поставил).
       $('chartwho').textContent = chSym + ' · ' + chTf
         + (chBy ? ' · поставил ' + chBy : '');
+    }
+
+    //: ═══ ЧУЖОЙ ВИДЖЕТ: НЕ ЗАГРУЗИЛСЯ - ГОВОРИМ ЭТО, А НЕ ПОКАЗЫВАЕМ ПУСТОТУ ═══
+    //: X-Frame-Options двух наших фреймовых доменов ПРОВЕРЕН живьём (замер Ren с прода
+    //: 31.08: заголовка нет ни у geckoterminal, ни у embed.polymarket), но полагаться на
+    //: это навсегда нельзя: правило у них может смениться в любой день, а мы узнаем об
+    //: этом от человека. Поэтому здесь механизм, а не обещание: ждём `load` ограниченное
+    //: время и, не дождавшись, НАЗЫВАЕМ причину и даём кнопку открыть у них. Пустой
+    //: прямоугольник читается как «комната сломалась», и разбор уходит в нашу сторону.
+    var wgtBuilt = '';
+
+    function wgtPaint(box) {
+      var w = WIDGETS[wgt];
+      var want = wgt + '|' + wgtVal;
+      if (!w) { wgt = 'tv'; chBuilt = null; wgtBuilt = ''; return; }
+      if (want === wgtBuilt) { wgtWho(); return; }
+      wgtBuilt = want;
+      chBuilt = null;                     // в коробке чужое - при возврате пересобрать
+      var keep = $('draw');               // ДОСКА ЖИВЁТ ПОВЕРХ ЛЮБОГО ВИДЖЕТА
+      [].slice.call(box.children).forEach(function (c) {
+        if (c !== keep) box.removeChild(c);
+      });
+      if (w.kind === 'img') {
+        var im = document.createElement('img');
+        im.style.cssText = 'position:absolute;inset:0;margin:auto;max-width:100%;max-height:100%';
+        im.alt = w.nm;
+        im.onerror = function () { wgtFail('картинка не загрузилась'); };
+        im.src = w.url(wgtVal);
+        box.insertBefore(im, keep);
+        wgtWho();
+        return;
+      }
+      if (!wgtVal) {
+        $('chartwho').textContent = w.nm + ': нечего показывать - нужен '
+          + (w.hint || 'адрес');
+        return;
+      }
+      var fr = document.createElement('iframe');
+      fr.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0';
+      fr.setAttribute('loading', 'lazy');
+      fr.setAttribute('referrerpolicy', 'no-referrer');
+      var done = false;
+      fr.onload = function () { done = true; };
+      // ЖДЁМ ФАКТ, А НЕ НАДЕЕМСЯ. При запрете во фрейме `onload` у части браузеров
+      // приходит на страницу-ошибку, у части не приходит вовсе - поэтому решает ТАЙМЕР,
+      // и он же покрывает случай «домен просто не ответил».
+      setTimeout(function () {
+        if (!done) wgtFail('домен не отдал страницу во фрейм за ' + (WGT_WAIT_MS / 1000) + ' с');
+      }, WGT_WAIT_MS);
+      fr.src = w.url(wgtVal);
+      box.insertBefore(fr, keep);
+      wgtWho();
+    }
+
+    function wgtWho() {
+      var w = WIDGETS[wgt] || {};
+      $('chartwho').textContent = (w.nm || wgt) + (wgtVal ? ' · ' + wgtVal : '')
+        + (wgtBy ? ' · поставил ' + wgtBy : '');
+    }
+
+    function wgtFail(why) {
+      var w = WIDGETS[wgt] || {};
+      $('chartwho').textContent = w.nm + ' не открылся: ' + why
+        + '. Похоже, у них закрыт показ во фрейме - открой у них и вернись.';
+      // ССЫЛКА КНОПКОЙ, А НЕ СОВЕТОМ «СКОПИРУЙ АДРЕС»: адресной строки в Telegram нет.
+      var b = document.getElementById('wgtout');
+      if (!b) {
+        b = document.createElement('button');
+        b.id = 'wgtout'; b.className = 'wide';
+        $('crypto').insertBefore(b, $('syms'));
+      }
+      b.textContent = '🌐 Открыть ' + (w.nm || 'виджет') + ' отдельно';
+      b.style.display = '';
+      b.onclick = function () {
+        var u = w.url ? w.url(wgtVal) : '';
+        try { if (tg && tg.openLink) { tg.openLink(u); return; } } catch (e) {}
+        try { window.open(u, '_blank'); } catch (e2) {}
+      };
+    }
+
+    //: ВЫБОР ВИДЖЕТА - ОБЩИЙ НА КОМНАТУ, КАК И СИМВОЛ. Едет тем же каналом данных и тем
+    //: же сердцебиением, что график: вошедший позже обязан увидеть то же, что остальные.
+    function wgtSet(k, val, by, mine) {
+      if (!WIDGETS[k]) return;
+      //: ЧИСТКА СТОИТ В ДВЕРИ, А НЕ У КАЖДОГО ВХОДА. Входов два - своя кнопка и чужое
+      //: сообщение, - и две копии правила «что считать годным адресом» разошлись бы на
+      //: первой правке (закон №40); разошлись бы молча, потому что оба входа продолжали
+      //: бы работать.
+      var v2 = wgtValOk(val);
+      if ((val || '') && !v2) {
+        //: ОТБРОШЕННОЕ НАЗЫВАЕТСЯ. Молча вернуть график значит оставить человека в
+        //: уверенности, что виджет включён у всех, кроме него.
+        say('Адрес «' + String(val).slice(0, 30) + '» не похож на путь виджета - не '
+            + 'ставлю.', true);
+        return;
+      }
+      var changed = (k !== wgt || v2 !== wgtVal);
+      wgt = k; wgtVal = v2; wgtBy = by || '';
+      if (changed) { wgtBuilt = ''; chBuilt = null; }
+      var b = document.getElementById('wgtout');
+      if (b) b.style.display = 'none';
+      // Панель открывается по тем же правилам, что у графика: явный выбор человека
+      // («закрыл руками») и замок сильнее нашего желания показать.
+      if (!chOpen && !chShut && !(lockOn && !iAmAdm)) chOpen = true;
+      chartPaint();
+      if (!mine) return;
+      // ═══ СЕРДЦЕБИЕНИЕ ОБЯЗАНО ВОЗВРАЩАТЬ СООБЩЕНИЕ, А НЕ СЛАТЬ ЕГО САМО ═══
+      // `beat` устроен так: `var m = fn(); if (m) send(m); else stopBeat(key)`. Колбэк,
+      // который шлёт сам и возвращает undefined, отработает РОВНО ОДИН РАЗ и погасит
+      // собственный повтор - то есть вошедший позже виджета не увидит, ради чего повтор
+      // и заводился. Ошибка тихая: у всех, кто уже в комнате, всё выглядит верно.
+      if (wgt === 'tv') {
+        // Возврат к графику: повторять нечего - у вошедшего позже TradingView стоит по
+        // умолчанию, а состояние пары догоняет своим сердцебиением `chart`.
+        stopBeat('wgt');
+        send({ t: 'wgt', k: 'tv', v: '', by: myLabel() });
+        return;
+      }
+      beat('wgt', function () {
+        return wgt !== 'tv' ? { t: 'wgt', k: wgt, v: wgtVal, by: myLabel() } : null;
+      });
+      send({ t: 'wgt', k: wgt, v: wgtVal, by: myLabel() });
     }
 
     function chartSet(sym, tf, by, mine) {
@@ -4513,6 +5222,7 @@ registerProcessor('rnn-denoise', RnnProc);
     }
 
     function paintSymBtns() {
+      paintWgtBtns();
       [].slice.call($('syms').children).forEach(function (b) {
         b.classList.toggle('on', !!b.dataset.sym && b.dataset.sym === chSym);
       });
@@ -4521,6 +5231,44 @@ registerProcessor('rnn-denoise', RnnProc);
       [].slice.call($('tfs').children).forEach(function (b) {
         b.classList.toggle('on', b.dataset.tf === chTf);
       });
+    }
+
+    //: ═══ РЯД ВЫБОРА ВИДЖЕТА ═══
+    //: Обратный путь у каждого - возврат на «График» (правило №55): виджет, который
+    //: можно включить и нельзя выключить, занял бы холст до конца созвона. Поэтому
+    //: TradingView стоит В ТОМ ЖЕ ряду обычной кнопкой, а не прячется под «убрать».
+    Object.keys(WIDGETS).forEach(function (k) {
+      var w = WIDGETS[k];
+      var b = document.createElement('button');
+      b.className = 'chip'; b.dataset.wgt = k; b.textContent = w.nm;
+      b.onclick = function () {
+        if (k === 'tv') { wgtSet('tv', '', 'Ты', true); return; }
+        // Повторный тап по выбранному виджету возвращает график - тот же обратный ход,
+        // что у пар, и лежит он там же, где прямой.
+        if (wgt === k) { wgtSet('tv', '', 'Ты', true); return; }
+        if (!w.hint) { wgtSet(k, '', 'Ты', true); return; }
+        //: АДРЕС СПРАШИВАЕМ, А НЕ УГАДЫВАЕМ. У GeckoTerminal путь это сеть и пул, у
+        //: Polymarket - slug рынка; вывести одно из другого нечем, и подставленное
+        //: «наверное» дало бы пустой фрейм без единого слова о причине.
+        var v = '';
+        try { v = prompt(w.nm + ': ' + w.hint) || ''; } catch (e) {}
+        v = v.trim();
+        if (!v) return;
+        wgtSet(k, v, 'Ты', true);
+      };
+      $('wgts').appendChild(b);
+    });
+
+    function paintWgtBtns() {
+      [].slice.call($('wgts').children).forEach(function (b) {
+        b.classList.toggle('on', b.dataset.wgt === wgt);
+      });
+      //: ПАРЫ И ТАЙМФРЕЙМЫ ОТНОСЯТСЯ К ГРАФИКУ И БОЛЬШЕ НИ К ЧЕМУ. Оставь мы их видимыми
+      //: под GeckoTerminal - тап по «BTC» молча ничего бы не менял, а это ровно тот
+      //: случай, когда кнопка врёт увереннее отсутствующей.
+      var tv = (wgt === 'tv');
+      $('syms').style.display = tv ? '' : 'none';
+      $('tfs').style.display = tv ? '' : 'none';
     }
 
     SYMS.forEach(function (p) {
@@ -4535,11 +5283,30 @@ registerProcessor('rnn-denoise', RnnProc);
       $('syms').appendChild(b);
     });
     var bOther = document.createElement('button');
-    bOther.className = 'chip'; bOther.textContent = '✏️ Своя';
-    bOther.onclick = function () {
+    bOther.className = 'chip'; bOther.textContent = '✏️ Свой символ';
+    //: ═══ СИМВОЛ РЕЗОЛВИТ БОТ, А НЕ СТРАНИЦА ═══
+    //: Прежняя редакция брала строку человека и совала её в виджет как есть: «pepe» и
+    //: «$PEPE» превращались в мёртвый график, а «ake» - в чужую монету. Правило «что
+    //: человек имел в виду под этим тикером» у нас УЖЕ ЕСТЬ и оно точное (`pick_coin`
+    //: с приоритетом по капе, `_try_stock` для акций), и живёт оно у бота. Заведи
+    //: страница своё - на карточке в чате была бы одна монета, а на графике в комнате
+    //: другая, и разошлись бы они молча (закон №40, живой прецедент $AKE против $CAKE).
+    //: НЕ ДОСТУЧАЛИСЬ - СТАВИМ КАК НАПИСАНО, И ГОВОРИМ ЭТО. Отказ был бы хуже: биржевой
+    //: символ вида `BINANCE:ARBUSDT` человек пишет верно, и запрещать его из-за молчания
+    //: бота значит ломать рабочий путь ради неработающего.
+    bOther.onclick = async function () {
       var v = '';
-      try { v = prompt('Пара как в TradingView, например BINANCE:ARBUSDT') || ''; } catch (e) {}
-      if (v.trim()) chartSet(v.trim(), chTf, 'Ты', true);
+      try {
+        v = prompt('Символ: «btc», «pepe», «AAPL» или готовое BINANCE:ARBUSDT') || '';
+      } catch (e) {}
+      v = v.trim();
+      if (!v) return;
+      if (!roomAsk) { chartSet(v, chTf, 'Ты', true); return; }
+      var res = await roomAsk({ kind: 'rtcsym', room: ROOM, nm2: v }, 'Ищу символ…');
+      if (res && res.sym) { chartSet(res.sym, chTf, 'Ты', true); return; }
+      if (res) return;                    // бот ответил и уже назвал причину
+      say('Бот не ответил про символ - ставлю как написано.');
+      chartSet(v, chTf, 'Ты', true);
     };
     $('syms').appendChild(bOther);
     // ЯВНАЯ КНОПКА РЯДОМ С НЕЯВНЫМ ПОВТОРНЫМ ТАПОМ. Повторный тап - для тех, кто его
@@ -5565,11 +6332,19 @@ registerProcessor('rnn-denoise', RnnProc);
       if (m.t === 'chart' && p) {
         chartSet(m.sym, m.tf, nameOf(p), false);
       }
+      if (m.t === 'wgt' && p) {
+        //: Строка приходит от соседа, значит чистится у ПОЛУЧАТЕЛЯ, а не у отправителя:
+        //: не проверь мы её здесь, чужой адрес уехал бы в наш фрейм как есть.
+        wgtSet(String(m.k || '').slice(0, 8), m.v, nameOf(p), false);
+      }
       // «ЧТО У ВАС ТАМ?» - ОТВЕЧАЕТ ТОЛЬКО ТОТ, У КОГО СОСТОЯНИЕ ЕСТЬ. Ответ идёт всем
       // (адресной посылки у канала нет), и это не беда: у остальных он просто совпадёт с
       // тем, что уже нарисовано.
       if (m.t === 'ask') {
         if (chSym) send({ t: 'chart', sym: chSym, tf: chTf, by: myLabel() });
+        // Виджет - такое же общее состояние, как пара: не ответь мы про него,
+        // вошедший позже увидел бы график там, где комната смотрит GeckoTerminal.
+        if (wgt !== 'tv') send({ t: 'wgt', k: wgt, v: wgtVal, by: myLabel() });
         if (tmrEnd > Date.now()) {
           send({ t: 'tmr', left: Math.round((tmrEnd - Date.now()) / 1000), by: myLabel() });
         }
@@ -5774,22 +6549,31 @@ registerProcessor('rnn-denoise', RnnProc);
   }, 15000);
 
   $('lay').onclick = function () {
-    layMode = (layMode === 'auto') ? 'grid' : (layMode === 'grid' ? 'spk' : 'auto');
+    // ═══ КРУГ ЗАМКНУТ, И «СВОБОДНО» В НЁМ ТОЛЬКО ТАМ, ГДЕ ОНО РАБОТАЕТ ═══
+    // На мобиле шаг пропускается: кнопка, после которой ничего не меняется (режим тут
+    // же становится сеткой), читается как сломанная - лучше её вовсе не предлагать.
+    layMode = (layMode === 'auto') ? 'grid'
+            : (layMode === 'grid' ? 'spk'
+            : (layMode === 'spk' ? (freeOk() ? 'free' : 'auto') : 'auto'));
     // ВОЗВРАТ В «АВТО» - ЭТО ПОЛНЫЙ СБРОС РУЧНОГО, А НЕ ПОЛОВИНА. Оставь мы закрепление,
     // человек выбрал бы «авто» и увидел ту же картинку - то есть кнопка соврала бы.
     // «АВТО» СНИМАЕТ ОБА РАЗМЕРА. Сними оно только высоту - окно осталось бы узким, и
     // кнопка, обещающая сброс, выполняла бы его наполовину (закон №55).
+    // «АВТО» СНИМАЕТ И СВОБОДНУЮ РАСКЛАДКУ: она ручная ровно в той же мере, и оставить
+    // её значило бы вернуть человеку тот же расставленный экран под словом «авто».
     if (layMode === 'auto') {
       layPin = ''; layBigH = 0; layBigW = 0;
+      layFree = {}; freeSave();
       $('screens').style.removeProperty('--bigh');
       $('screens').style.removeProperty('--bigw');
     }
     laySave();
     layPaint();
     say(layMode === 'auto'
-        ? 'Раскладка авто: одно видео во всю ширину, два и больше - сеткой.'
+        ? 'Раскладка авто: одно видео во всю ширину, два и больше - сеткой. Расставленные окна сбросил.'
         : (layMode === 'grid' ? 'Сетка: все окна одного размера.'
-                              : 'Крупно: говорящий большой, остальные лентой.'));
+        : (layMode === 'spk' ? 'Крупно: говорящий большой, остальные лентой.'
+        : 'Свободно: тащи за заголовок, тяни за угол. Это только у тебя - соседей не двигает.')));
   };
 
   $('full').onclick = async function () {
