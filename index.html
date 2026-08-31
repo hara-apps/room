@@ -232,6 +232,10 @@
                font-size:19px; line-height:1; background:var(--soft); color:var(--fg); border-radius:999px; }
   button.snd { flex:0 0 auto; width:auto; padding:7px 11px; margin:0 6px 6px 0;
                font-size:13px; font-weight:500; background:var(--soft); color:var(--fg); border-radius:999px; }
+  /* Ряд «Готово / Отмена» у своего окна ввода: ОТМЕНА ОБЯЗАТЕЛЬНА - окно, из которого
+     нельзя выйти, это западня, а спрашиваем мы посреди разговора. */
+  #askrow { display:flex; gap:8px; margin-top:8px; }
+  #ask1 p { margin:0 0 8px; font-weight:600; }
   button.pre { flex:0 0 auto; width:auto; padding:8px 12px; margin:0 6px 6px 0;
                font-size:13px; font-weight:500; background:var(--soft); color:var(--fg); border-radius:999px; }
   /* ВСПЛЫВАЮЩИЕ РЕАКЦИИ ЖИВУТ НАД НИЖНЕЙ ПОЛОСОЙ И НЕ ЛОВЯТ ТАПЫ (`pointer-events:none`):
@@ -405,6 +409,24 @@
 
 <!-- ГОЛОСОВАНИЕ КОМНАТЫ. Рядом с рынком Polymarket, когда он привязан: «рынок говорит
      62%, комната говорит 40%» - это и есть тот ответ, ради которого голосуют. -->
+<!-- ═══ СВОЙ ВВОД ВМЕСТО `prompt` ═══
+     ЖИВОЙ ОТКАЗ REN 31.08: GeckoTerminal и Polymarket не открывались ВОВСЕ - тап, и
+     ничего, даже механизм отказа за 8 секунд не срабатывал. Причина ровно одна и видна
+     по коду: это ЕДИНСТВЕННЫЕ два виджета с `hint`, то есть единственные, кому нужен
+     адрес, - и спрашивали мы его через `window.prompt`. В вебвью Telegram он не
+     показывается: возвращает null сразу, наш код читает пустую строку и МОЛЧА выходит.
+     Индекс страха адреса не требует и потому работал.
+     `prompt` тут не «некрасив», а НЕ РАБОТАЕТ, и лечится это своим окном - тем же, каким
+     мы уже спрашиваем вопрос комнате. -->
+<div class="card" id="ask1" style="display:none">
+  <p id="asktitle"></p>
+  <input id="askin" class="tin" type="text" maxlength="200" autocomplete="off">
+  <div id="askrow">
+    <button id="askok" class="pre">Готово</button>
+    <button id="askno" class="pre">Отмена</button>
+  </div>
+</div>
+
 <div class="card" id="poll" style="display:none">
   <p id="pollq"></p>
   <p class="me" id="pollmkt"></p>
@@ -492,6 +514,16 @@
     <label class="me" for="djv" id="djvlab"></label>
     <input id="djv" type="range" min="0" max="30" step="1">
   </div>
+  <!-- ГРОМКОСТЬ ГОЛОСОВ - У КАЖДОГО СВОЯ, И ПО УМОЛЧАНИЮ ОНА МАКСИМАЛЬНАЯ.
+       ЖАЛОБА ТЕСТИРОВЩИКА 31.08: на старом телефоне комната тихая, обычные звонки
+       нормальные. Мы громкость НЕ ЗАНИЖАЛИ (проверено по коду: `attachTrack` отдаёт
+       элемент как есть, `volume` трогает только радио) - значит ползунок 0..100% не
+       вылечил бы НИЧЕГО: он уже стоял бы на потолке. Поэтому шкала идёт ВЫШЕ ста, а
+       усиление сверх 1.0 делает Web Audio: у `<audio>.volume` потолок ровно 1.0. -->
+  <div id="voxvol" style="display:none">
+    <label class="me" for="voxv" id="voxvlab"></label>
+    <input id="voxv" type="range" min="10" max="300" step="10">
+  </div>
   <p class="me" id="showhint"></p>
   <!-- ВЫХОД В БРАУЗЕР ПОКАЗЫВАЕТСЯ ТОЛЬКО КОГДА ОН ПРАВДА НУЖЕН: постоянная кнопка
        «открой в браузере» читалась бы как «аппка не работает». -->
@@ -573,7 +605,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'e166335b05bc';
+  var VERSION = '1ff752dabdaa';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -600,6 +632,45 @@
     START_PARAM = String((tg && tg.initDataUnsafe && tg.initDataUnsafe.start_param) || '');
   } catch (e) {}
   var ROOM = (q.get('room') || START_PARAM || '').toLowerCase();
+
+  // ═══ ОДНА ДВЕРЬ «СПРОСИТЬ СТРОКУ», И ОНА НЕ `prompt` ═══
+  // `window.prompt` в вебвью Telegram не показывается вовсе: возвращает null сразу, и
+  // вызывающий читает это как «человек отменил». Отличить одно от другого нечем, поэтому
+  // два виджета из трёх молча не открывались НИКОГДА (живой отказ Ren 31.08).
+  // Здесь окно НАШЕ, и оно ведёт себя одинаково на всех клиентах. Возврат `null` значит
+  // «человек отказался» - и ЭТО ТЕПЕРЬ ПРАВДА, а не следствие отсутствующего API.
+  var _askDone = null;
+  function askText(title, hint, val) {
+    // Второй спрос поверх первого - это потерянный ответ. Закрываем прежний отказом.
+    if (_askDone) { try { _askDone(null); } catch (e) {} _askDone = null; }
+    var box = document.getElementById('ask1');
+    var inp = document.getElementById('askin');
+    if (!box || !inp) return Promise.resolve(null);
+    document.getElementById('asktitle').textContent = title || '';
+    inp.placeholder = hint || '';
+    inp.value = val || '';
+    box.style.display = '';
+    try { inp.focus(); } catch (e) {}
+    return new Promise(function (done) {
+      _askDone = function (v) {
+        _askDone = null;
+        box.style.display = 'none';
+        done(v);
+      };
+    });
+  }
+  (function () {
+    var ok = document.getElementById('askok');
+    var no = document.getElementById('askno');
+    var inp = document.getElementById('askin');
+    if (ok) ok.onclick = function () { if (_askDone) _askDone(inp.value.trim()); };
+    if (no) no.onclick = function () { if (_askDone) _askDone(null); };
+    // ENTER - ТОТ ЖЕ «ГОТОВО»: на телефоне это единственная кнопка под рукой, и без него
+    // человек жмёт её на клавиатуре, ничего не происходит, и он решает, что окно мёртвое.
+    if (inp) inp.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && _askDone) { e.preventDefault(); _askDone(inp.value.trim()); }
+    });
+  })();
 
   function say(t, bad) {
     var el = $('state');
@@ -1019,6 +1090,10 @@
       if (isDjTrack) { el.dataset.dj = '1'; djSids[sid] = 1; }
       document.body.appendChild(el);
       attached[sid] = (attached[sid] || []).concat([el]);
+      // ═══ НОВАЯ ДОРОЖКА ПОЛУЧАЕТ НЫНЕШНЮЮ ГРОМКОСТЬ, А НЕ ЗАВОДСКУЮ ═══
+      // Поставь человек усиление и войди кто-то следующим - тот звучал бы тише всех
+      // остальных, и выглядело бы это как «регулятор действует не на всех».
+      if (!isDjTrack) { try { applyVoxVolume(); } catch (e) {} }
       return el;
   }
 
@@ -1097,6 +1172,129 @@
       dropDjAudio();
       djTrack = null;
       showDjVol(false);
+  }
+
+  // ═════════════════════════════════════════════════════════════════════════════
+  // ГРОМКОСТЬ ГОЛОСОВ: ДО 100% - ЭЛЕМЕНТОМ, ВЫШЕ - WEB AUDIO
+  // ═════════════════════════════════════════════════════════════════════════════
+  //: ═══ ЧТО МЫ ПРОВЕРИЛИ ПО КОДУ, ПРЕЖДЕ ЧЕМ ДЕЛАТЬ РУЧКУ ═══
+  //: (1) Воспроизведение мы НЕ ЗАНИЖАЕМ: `attachTrack` вешает элемент как есть, а
+  //:     `.volume` трогает ТОЛЬКО дорожки радио (`audio[data-dj="1"]`). Голоса звучат
+  //:     на 1.0 - то есть на максимуме, который вообще умеет `<audio>`.
+  //: (2) RNNoise и АРУ живут на стороне ГОВОРЯЩЕГО, а не слушателя: они меняют то, что
+  //:     уезжает в комнату, и «тихо у меня» ими не лечится в принципе. Зато они могут
+  //:     сделать тихим ГОВОРЯЩЕГО - и это уже видно на строке звука у него.
+  //: Отсюда вывод: ползунок 0..100% был бы ручкой, которая не может решить названную
+  //: задачу, - он уже на потолке. Значит либо выше ста, либо ручки нет вовсе.
+  //:
+  //: ═══ ПОЧЕМУ УСИЛЕНИЕ ВКЛЮЧАЕТСЯ ТОЛЬКО СВЕРХ 100% ═══
+  //: `createMediaElementSource` ЗАБИРАЕТ звук элемента в граф НАВСЕГДА: пока контекст
+  //: не запущен, звука нет ВООБЩЕ. А в вебвью Telegram контекст без жеста человека
+  //: остаётся `suspended` - это мы уже проходили на шумодаве. Значит тихий звук мы
+  //: рискуем променять на ПОЛНУЮ тишину, и делать это без спроса нельзя.
+  //: Ниже 100% граф не нужен вовсе (элемент умеет сам), выше - нужен, и там уже есть
+  //: жест: человек ТЯНЕТ ползунок. Не завёлся - возвращаем 100% и ГОВОРИМ причину.
+  var voxVol = 100, voxCtx = null, voxNodes = {}, voxWhy = '';
+  try {
+    var _vv = parseInt(localStorage.getItem('rtc_vox_vol'), 10);
+    if (_vv >= 10 && _vv <= 300) voxVol = _vv;
+  } catch (e) {}
+
+  function voxBoost(el) {
+      //: Один элемент - один узел. Повторный `createMediaElementSource` на том же
+      //: элементе бросает InvalidStateError, и это не теория: перерисовка списка зовёт
+      //: применение громкости на каждом обновлении.
+      var key = el.__voxKey || (el.__voxKey = 'v' + Math.random().toString(36).slice(2));
+      if (voxNodes[key]) return voxNodes[key];
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) { voxWhy = 'браузер не умеет Web Audio'; return null; }
+      try {
+          if (!voxCtx) voxCtx = new Ctx();
+          var srcNode = voxCtx.createMediaElementSource(el);
+          var g = voxCtx.createGain();
+          srcNode.connect(g); g.connect(voxCtx.destination);
+          voxNodes[key] = g;
+          return g;
+      } catch (e) {
+          voxWhy = (e && e.name) || 'усилитель не собрался';
+          return null;
+      }
+  }
+
+  function voxEls() {
+      //: РАДИО СЮДА НЕ ВХОДИТ: у него своя шкала и свой смысл (фон под разговор).
+      //: Сложи их в один регулятор - и «сделать голоса громче» подняло бы фон вместе с
+      //: ними, то есть разборчивость осталась бы прежней.
+      var out = [];
+      var els = document.querySelectorAll('audio');
+      for (var i = 0; i < els.length; i++) {
+          if (els[i].dataset && els[i].dataset.dj === '1') continue;
+          out.push(els[i]);
+      }
+      return out;
+  }
+
+  function applyVoxVolume() {
+      var els = voxEls(), i;
+      if (voxVol <= 100) {
+          //: ГРАФ НЕ ТРОГАЕМ ВОВСЕ, пока он не нужен: включённый однажды, он остаётся
+          //: единственной дорогой звука, и его сбой стал бы нашим.
+          for (i = 0; i < els.length; i++) {
+              try { els[i].volume = Math.max(0, Math.min(1, voxVol / 100)); } catch (e) {}
+              var g0 = els[i].__voxKey && voxNodes[els[i].__voxKey];
+              if (g0) { try { g0.gain.value = 1; } catch (e2) {} }
+          }
+          return true;
+      }
+      var okAny = false;
+      for (i = 0; i < els.length; i++) {
+          try { els[i].volume = 1; } catch (e) {}
+          var g = voxBoost(els[i]);
+          if (!g) continue;
+          try { g.gain.value = voxVol / 100; okAny = true; } catch (e2) {}
+      }
+      //: КОНТЕКСТ ЗАПУСКАЕМ ЯВНО: жест у нас есть - человек тянет ползунок. Проверяем
+      //: ФАКТ (`state`), а не то, что вызов вернулся: `suspended` не обрабатывает звук.
+      if (voxCtx && voxCtx.state !== 'running') {
+          try { voxCtx.resume(); } catch (e) {}
+      }
+      return okAny || !els.length;
+  }
+
+  function voxPaint() {
+      var box = $('voxvol');
+      if (!box) return;
+      box.style.display = '';
+      var sl = $('voxv');
+      sl.value = String(voxVol);
+      voxLab();
+      sl.oninput = function () {
+          voxVol = Math.max(10, Math.min(300, parseInt(sl.value, 10) || 100));
+          var ok = applyVoxVolume();
+          if (!ok && voxVol > 100) {
+              //: НЕ СМОГЛИ УСИЛИТЬ - ВОЗВРАЩАЕМ ТО, ЧТО ТОЧНО РАБОТАЕТ, И НАЗЫВАЕМ
+              //: ПРИЧИНУ. Оставить ползунок наверху при мёртвом усилителе значило бы
+              //: показать человеку «300%» над неизменившимся звуком.
+              voxVol = 100; sl.value = '100'; applyVoxVolume();
+          }
+          voxLab();
+          try { localStorage.setItem('rtc_vox_vol', String(voxVol)); } catch (e) {}
+      };
+  }
+
+  //: ПОКАЗЫВАЕМ СРАЗУ, А НЕ ПО СОБЫТИЮ: у ползунка радио есть повод появляться и
+  //: исчезать (дорожка радио), а голоса в комнате есть ВСЕГДА - значит и регулятор
+  //: обязан быть на месте до того, как человек начнёт искать, почему тихо.
+  //: Разметка стоит ВЫШЕ скрипта в том же документе, поэтому элемент уже существует.
+  try { voxPaint(); } catch (e) { }
+
+  function voxLab() {
+      var t = 'Громкость голосов: ' + voxVol + '%';
+      if (voxVol > 100) t += ' (усиление - если собеседника еле слышно)';
+      else if (voxVol < 100) t += ' (у каждого своя)';
+      else t += ' (обычная; тяни вправо, если тихо)';
+      if (voxWhy && voxVol <= 100) t += ' · усилитель не завёлся: ' + voxWhy;
+      $('voxvlab').textContent = t;
   }
 
   function applyDjVolume() {
@@ -1649,9 +1847,7 @@
 
   async function slotSave() {
     if (!roomAsk) { say('Ещё подключаюсь - слоты будут через секунду.', true); return; }
-    var nm = '';
-    try { nm = prompt('Имя раскладки, например «планёрка»') || ''; } catch (e) {}
-    nm = nm.trim();
+    var nm = await askText('Как назвать раскладку?', 'например «планёрка»');
     if (!nm) return;
     // ШЛЁМ ТО, ЧТО ПРАВДА СТОИТ НА ЭКРАНЕ. Собрать «как должно быть» отдельной формулой
     // значило бы завести второй ответ на вопрос «где лежат окна» (закон №40).
@@ -2791,7 +2987,8 @@
         var nm = q.get('name') || '';
         if (!nm) {
           stage(BOOT_ASKING);
-          try { nm = (prompt('Как тебя звать в комнате?') || '').slice(0, 40); } catch (e) {}
+          nm = ((await askText('Как тебя звать в комнате?', 'имя видят соседи')) || '')
+                 .slice(0, 40);
           stage('запрос токена');
         }
         // ═══ СВОЁ МЕСТО ВОЗВРАЩАЕМ, А НЕ ЗАНИМАЕМ ВТОРОЕ ═══
@@ -4405,9 +4602,30 @@ registerProcessor('rnn-denoise', RnnProc);
       // и второе имя того же вида читателю неразличимо, а при удалении внутреннего
       // вызовы молча поехали бы в чужой сторож и испортили бы его диагностику
       // (закон №26: локальное имя не совпадает с модульным). Поймал собственный `rtc17`.
+      //: ═══ СТАДИЯ ОБЯЗАНА ДОЙТИ ДО ЧЕЛОВЕКА, А НЕ ТОЛЬКО ДО КОНСОЛИ ═══
+      //: ЖИВОЙ ОТКАЗ Ren 31.08: «после камеры выбрал «весь экран» -> ничего, висит «Жду
+      //: окно выбора экрана»». Диалог при этом ОТКРЫЛСЯ и человек в нём ВЫБРАЛ - то есть
+      //: `getDisplayMedia` отработала, и висела уже ПУБЛИКАЦИЯ. А на экране оставалась
+      //: подсказка ПЕРВОЙ стадии: `say()` пишет строку, и никто её не перебивал ещё
+      //: двадцать пять секунд, до сторожа публикации.
+      //: ЦЕНА ЭТОГО НЕ В КОСМЕТИКЕ: подпись НАЗЫВАЛА НЕ ТУ СТАДИЮ, и следующий разбор
+      //: снова ушёл бы в окно выбора - в исправную половину. Стадии у нас посчитаны с
+      //: прошлого захода, до человека они просто не доезжали. На телефоне консоли нет.
+      var SHOW_SAY = {
+        'запросил экран': '',            // первую стадию озвучивает мягкая подсказка
+        'публикую дорожки': 'Экран взял, отдаю его комнате - это пара секунд.',
+      };
       function showStage(what) {
         try { console.log('[показ] ' + what); } catch (e) {}
         try { window.__STAGE = (window.__STAGE || []); window.__STAGE.push(what); } catch (e) {}
+        try {
+          var head = String(what).split(':')[0];
+          if (head === 'поток получен') {
+            say('Экран взял, отдаю его комнате - это пара секунд.', true);
+          } else if (SHOW_SAY[head]) {
+            say(SHOW_SAY[head], true);
+          }
+        } catch (e) {}
       }
 
       // ═══ ДИАЛОГ НЕ ОТКРЫЛСЯ - ГОВОРИМ ЭТО И ДАЁМ ВЫХОД ═══
@@ -4580,8 +4798,22 @@ registerProcessor('rnn-denoise', RnnProc);
             catch (e6) {}
           }
           live = false;
+          // ═══ ОТКАЗ НАЗЫВАЕТ ИЗВЕСТНЫЙ ВЫХОД, А НЕ ТОЛЬКО ИМЯ ОШИБКИ ═══
+          // Про сочетание «камера включена + показ экрана» у нас есть ЖИВОЙ ФАКТ: на
+          // свежем заходе всё работает, после камеры - нет (два прогона Ren). Почему
+          // так у платформы, из кода не установить (закон №48), но выход мы знаем, и
+          // молчать о нём значит оставить человека перед именем исключения.
+          var _camOn2 = false;
+          try {
+            _camOn2 = !!(kind === 'screen' && document.getElementById('cam')
+                         && document.getElementById('cam').classList.contains('on'));
+          } catch (e7) {}
           say('Показать не вышло (' + (e && e.name || 'ошибка') + '): '
-              + (e && e.message || e), true);
+              + (e && e.message || e)
+              + (_camOn2 ? ' Похоже на сочетание с камерой: выключи её и нажми «Экран» '
+                         + 'ещё раз, либо открой комнату в браузере - там показ работает.'
+                         : ''), true);
+          if (_camOn2) showBrowserWay();
           // ═══ ВОЗВРАЩАЕМ ДВИЖОК, А НЕ ТОЛЬКО ПОКАЗЫВАЕМ ОШИБКУ ═══
           // Требование Ren по живому прогону: после неудачи и экран, и камера обязаны
           // включаться без перезахода. Ждём ФАКТА `room.state === 'connected'`, а не
@@ -5036,7 +5268,23 @@ registerProcessor('rnn-denoise', RnnProc);
           sc.async = true;
           sc.text = JSON.stringify({
             symbol: chSym, interval: chTf, theme: 'dark', style: '1', locale: 'ru',
-            hide_side_toolbar: true, hide_top_toolbar: false, allow_symbol_change: false,
+            // ═══ ВЕРХНЯЯ ПАНЕЛЬ ВИДЖЕТА - ВТОРАЯ ДВЕРЬ К ОБЩЕМУ СОСТОЯНИЮ ═══
+            // ЖИВОЙ ОТКАЗ Ren 31.08: «выбрал AAVE - BTC не затёрся, шкала показала
+            // 640 000 000, подпись осталась BINANCE:BTCUSDT, в углу виджета висит выбор
+            // AAVE». Это не поломка пересборки: `chBuilt` отработал верно, потому что
+            // НАШЕ состояние не менялось ВООБЩЕ. Символ сменили ВНУТРИ виджета - его
+            // верхняя панель несёт и поиск символа, и «сравнить», а `allow_symbol_change:
+            // false` кнопку сравнения не выключает. Наложенный AAVE делит шкалу с BTC,
+            // отсюда и бессмысленная ось.
+            // ПОЧЕМУ ЭТО ХУЖЕ КРИВОЙ ПОДПИСИ: пара - состояние КОМНАТЫ, оно уезжает всем
+            // сердцебиением. Смена внутри виджета ЛОКАЛЬНА и невидима остальным - один
+            // человек смотрит на AAVE, все прочие на BTC, и заметить это нечем. Ровно
+            // тот класс, ради которого записан закон №40: у одной функции одна дверь.
+            // ЧТО ПОТЕРЯЛИ И ЧЕМ ВЕРНУЛИ: индикаторы и сравнение. Сохранять их мы всё
+            // равно не умеем (бесплатный embed не отдаёт наружу ни одного объекта -
+            // ни `widget`, ни `save()`), поэтому под графиком стоит кнопка открыть эту
+            // же пару у TradingView, где есть всё и где это личное дело смотрящего.
+            hide_side_toolbar: true, hide_top_toolbar: true, allow_symbol_change: false,
             save_image: false, autosize: true,
           });
           host.appendChild(sc);
@@ -5047,11 +5295,17 @@ registerProcessor('rnn-denoise', RnnProc);
         // на чистом поле, а не чтобы закрыть панель.
         $('chartwho').textContent = 'Графика нет - чистая доска. Выбери пару, если нужен '
           + 'график: его увидят все, кто в комнате.';
+        outBtn('');
         return;
       }
       // ПОДПИСЬ ОБНОВЛЯЕТСЯ ВСЕГДА - ОНА ДЕШЁВАЯ И МЕНЯЕТСЯ ЧАЩЕ ГРАФИКА (кто поставил).
       $('chartwho').textContent = chSym + ' · ' + chTf
         + (chBy ? ' · поставил ' + chBy : '');
+      // ИНДИКАТОРЫ И СРАВНЕНИЕ ЖИВУТ У НИХ, И ЭТО ЧЕСТНЕЕ ВТОРОЙ ДВЕРИ ВНУТРИ ВИДЖЕТА:
+      // там это ЛИЧНОЕ дело смотрящего и никого не вводит в заблуждение, а внутри нашего
+      // общего графика оно молча расходилось с тем, что видят остальные.
+      outBtn('🌐 Открыть ' + chSym + ' на TradingView',
+             'https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(chSym));
     }
 
     //: ═══ ЧУЖОЙ ВИДЖЕТ: НЕ ЗАГРУЗИЛСЯ - ГОВОРИМ ЭТО, А НЕ ПОКАЗЫВАЕМ ПУСТОТУ ═══
@@ -5112,24 +5366,33 @@ registerProcessor('rnn-denoise', RnnProc);
         + (wgtBy ? ' · поставил ' + wgtBy : '');
     }
 
-    function wgtFail(why) {
-      var w = WIDGETS[wgt] || {};
-      $('chartwho').textContent = w.nm + ' не открылся: ' + why
-        + '. Похоже, у них закрыт показ во фрейме - открой у них и вернись.';
-      // ССЫЛКА КНОПКОЙ, А НЕ СОВЕТОМ «СКОПИРУЙ АДРЕС»: адресной строки в Telegram нет.
+    // ═══ КНОПКА «ОТКРЫТЬ ОТДЕЛЬНО» - ОДНА ДВЕРЬ НА ДВУХ ВЫЗЫВАЮЩИХ (закон №40) ═══
+    // Её зовут отказ чужого виджета и график (индикаторы TradingView живут только у них).
+    // Две копии «как показать кнопку и куда она ведёт» разошлись бы на первой правке.
+    // ССЫЛКА КНОПКОЙ, А НЕ СОВЕТОМ «СКОПИРУЙ АДРЕС»: адресной строки в Telegram нет.
+    function outBtn(label, url) {
       var b = document.getElementById('wgtout');
       if (!b) {
+        if (!label) return;             // нечего показывать - нечего и создавать
         b = document.createElement('button');
         b.id = 'wgtout'; b.className = 'wide';
         $('crypto').insertBefore(b, $('syms'));
       }
-      b.textContent = '🌐 Открыть ' + (w.nm || 'виджет') + ' отдельно';
+      if (!label) { b.style.display = 'none'; return; }
+      b.textContent = label;
       b.style.display = '';
       b.onclick = function () {
-        var u = w.url ? w.url(wgtVal) : '';
-        try { if (tg && tg.openLink) { tg.openLink(u); return; } } catch (e) {}
-        try { window.open(u, '_blank'); } catch (e2) {}
+        try { if (tg && tg.openLink) { tg.openLink(url); return; } } catch (e) {}
+        try { window.open(url, '_blank'); } catch (e2) {}
       };
+    }
+
+    function wgtFail(why) {
+      var w = WIDGETS[wgt] || {};
+      $('chartwho').textContent = w.nm + ' не открылся: ' + why
+        + '. Похоже, у них закрыт показ во фрейме - открой у них и вернись.';
+      outBtn('🌐 Открыть ' + (w.nm || 'виджет') + ' отдельно',
+             w.url ? w.url(wgtVal) : '');
     }
 
     //: ВЫБОР ВИДЖЕТА - ОБЩИЙ НА КОМНАТУ, КАК И СИМВОЛ. Едет тем же каналом данных и тем
@@ -5151,8 +5414,7 @@ registerProcessor('rnn-denoise', RnnProc);
       var changed = (k !== wgt || v2 !== wgtVal);
       wgt = k; wgtVal = v2; wgtBy = by || '';
       if (changed) { wgtBuilt = ''; chBuilt = null; }
-      var b = document.getElementById('wgtout');
-      if (b) b.style.display = 'none';
+      outBtn('');
       // Панель открывается по тем же правилам, что у графика: явный выбор человека
       // («закрыл руками») и замок сильнее нашего желания показать.
       if (!chOpen && !chShut && !(lockOn && !iAmAdm)) chOpen = true;
@@ -5241,7 +5503,7 @@ registerProcessor('rnn-denoise', RnnProc);
       var w = WIDGETS[k];
       var b = document.createElement('button');
       b.className = 'chip'; b.dataset.wgt = k; b.textContent = w.nm;
-      b.onclick = function () {
+      b.onclick = async function () {
         if (k === 'tv') { wgtSet('tv', '', 'Ты', true); return; }
         // Повторный тап по выбранному виджету возвращает график - тот же обратный ход,
         // что у пар, и лежит он там же, где прямой.
@@ -5250,9 +5512,7 @@ registerProcessor('rnn-denoise', RnnProc);
         //: АДРЕС СПРАШИВАЕМ, А НЕ УГАДЫВАЕМ. У GeckoTerminal путь это сеть и пул, у
         //: Polymarket - slug рынка; вывести одно из другого нечем, и подставленное
         //: «наверное» дало бы пустой фрейм без единого слова о причине.
-        var v = '';
-        try { v = prompt(w.nm + ': ' + w.hint) || ''; } catch (e) {}
-        v = v.trim();
+        var v = await askText(w.nm, w.hint);
         if (!v) return;
         wgtSet(k, v, 'Ты', true);
       };
@@ -5295,11 +5555,8 @@ registerProcessor('rnn-denoise', RnnProc);
     //: символ вида `BINANCE:ARBUSDT` человек пишет верно, и запрещать его из-за молчания
     //: бота значит ломать рабочий путь ради неработающего.
     bOther.onclick = async function () {
-      var v = '';
-      try {
-        v = prompt('Символ: «btc», «pepe», «AAPL» или готовое BINANCE:ARBUSDT') || '';
-      } catch (e) {}
-      v = v.trim();
+      var v = await askText('Какой символ показать?',
+                            '«btc», «pepe», «AAPL» или готовое BINANCE:ARBUSDT');
       if (!v) return;
       if (!roomAsk) { chartSet(v, chTf, 'Ты', true); return; }
       var res = await roomAsk({ kind: 'rtcsym', room: ROOM, nm2: v }, 'Ищу символ…');
@@ -5501,7 +5758,9 @@ registerProcessor('rnn-denoise', RnnProc);
     }
 
     var cvEl = $('draw');
-    cvEl.addEventListener('pointerdown', function (e) {
+    // ПОДПИСЬ СПРАШИВАЕТСЯ НАШИМ ОКНОМ, А ОНО АСИНХРОННО - отсюда `async`. Прежний
+    // `prompt` был синхронным и в вебвью Telegram просто не показывался.
+    cvEl.addEventListener('pointerdown', async function (e) {
       if (!drawOn) return;
       var p = xy(e);
       if (!p) return;
@@ -5520,7 +5779,7 @@ registerProcessor('rnn-denoise', RnnProc);
       }
       if (tool === 'text') {
         var v = '';
-        try { v = (prompt('Что подписать?') || '').slice(0, 60); } catch (e2) {}
+        v = ((await askText('Что подписать?', 'коротко, до 60 символов')) || '').slice(0, 60);
         if (!v.trim()) return;
         var tid = me + '|' + (++curId);
         var msg = { t: 'd', id: tid, k: 'text', x: v, p: [[+p[0].toFixed(4), +p[1].toFixed(4)]] };
