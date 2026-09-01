@@ -559,6 +559,15 @@
 <!-- АДМИНСКИЕ ДЕЙСТВИЯ НАД ВСЕЙ КОМНАТОЙ. Появляются ТОЛЬКО у админа: кнопка, которая
      ответит «это может только админ», хуже отсутствующей. Право всё равно проверяет БОТ
      (закон №32) - здесь мы решаем лишь, что показывать. -->
+<!-- ═══ СВОЙ ПРИЁМ - КАЖДОМУ, А НЕ ТОЛЬКО АДМИНУ ═══
+     Строка `connq` ниже живёт в админской карточке и отвечает на вопрос «у КОГО из
+     соседей плохо». Она НЕ МОЖЕТ ответить на вопрос «а меня-то рвёт?»: снимок делает
+     каждый у себя, и цифры про соседа ничего не говорят про мой собственный приём.
+     Живой случай 31.08: у Максима, который не слышал, в админской строке стояло
+     «0.0% потерь» - верное число не на тот вопрос. Эта полоса про МОЙ приём и видна
+     МНЕ, потому что решение (выключить видео) принимаю я. -->
+<p class="me" id="rxq" style="display:none"></p>
+
 <div id="admin" class="card" style="display:none">
   <p class="hd">Ты админ комнаты · это действует у всех</p>
   <!-- СВЯЗЬ - ЦИФРАМИ, И ТОЛЬКО АДМИНУ. «У меня заикается» и «потери 3.4%, джиттер 48 мс»
@@ -605,7 +614,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = '1a91ffd5d709';
+  var VERSION = '4202246b4b40';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -801,6 +810,129 @@
   // чем «не трогали».
   // ФЛАГ, КОТОРОГО БРАУЗЕР НЕ ЗНАЕТ, БЕЗОПАСЕН: неизвестные имена в getUserMedia
   // отбрасываются, а не роняют захват. Поэтому его отсутствие в отчёте - НЕ повод кричать.
+  // ═══ ПОТОЛКИ ВИДЕО И ЗВУКА: НАШИ ЧИСЛА, И АРИФМЕТИКА СТОИТ РЯДОМ ═══
+  // ПОЧЕМУ ЭТО ВООБЩЕ ВАЖНО. SFU не сжимает - он ПЕРЕСЫЛАЕТ, поэтому один показ экрана
+  // уходит КАЖДОМУ: при N слушателях канал сервера тратится N раз. При 20 участниках
+  // один показ на 2500 кбит/с это 47 Мбит/с исходящих, а речь всей комнаты - 12 Мбит/с
+  // (20x19x32 кбит/с). Видео дороже голоса в разы, и режется в первую очередь ОНО.
+  //
+  // ЧИСЛА ВЫВЕДЕНЫ, А НЕ ВЗЯТЫ НА ГЛАЗ:
+  //   камера   600 кбит/с x 20 слушателей = 12 Мбит/с на одного показывающего;
+  //   экран   1200 кбит/с x 20            = 24 Мбит/с;
+  //   речь      32 кбит/с x 20x19         = 12 Мбит/с на всю комнату.
+  // При замеренных 388 Мбит/с аплинка песочницы это оставляет запас даже когда камеры
+  // включены у пятерых. Прежние умолчания SDK (камера ~1700, показ выше) съедали его
+  // втрое быстрее, и первым страдал голос - ровно то, на что пожаловался Максим.
+  //
+  // ПОКАЗ ЭКРАНА: БИТРЕЙТ ВЫШЕ, КАДРОВ МЕНЬШЕ. Читаемость текста держит РАЗРЕШЕНИЕ, а не
+  // частота: статичный слайд при 5 к/с читается как при 30 и стоит вшестеро дешевле.
+  // Ужимать разрешение показа НЕЛЬЗЯ - именно оно и есть то, ради чего его включают.
+  var VID_CAM_BR = 600 * 1000, VID_CAM_FPS = 20;
+  var VID_SCR_BR = 1200 * 1000, VID_SCR_FPS = 5;
+  var AUD_BR = 32 * 1000;
+  //: СЛОЙ, НА КОТОРЫЙ САДИМСЯ ПРИ ПЛОХОМ ПРИЁМЕ. Не «отписаться от видео»: человек
+  //: пришёл смотреть показ экрана, и отняв картинку целиком, мы решили бы за него.
+  var LOW_ON_BAD = true;
+
+  // ═══ ПРИОРИТЕТ ГОЛОСА НАД КАРТИНКОЙ - НА УРОВНЕ WebRTC, А НЕ ПРОСЬБОЙ К SDK ═══
+  // ПОПРАВКА К ОЖИДАНИЮ, И ОНА ВАЖНА: `degradationPreference` НЕ ЗАЩИЩАЕТ ЗВУК ОТ ВИДЕО.
+  // Он отвечает на другой вопрос - чем жертвовать ВНУТРИ видео, разрешением или
+  // частотой. Полосу между дорожками делит распределитель браузера, и ему говорят
+  // ДРУГИМ полем: `priority`/`networkPriority` у кодировки отправителя.
+  //
+  // ДЕЛАЕМ ЭТО ЧЕРЕЗ НАТИВНЫЙ `RTCRtpSender`, А НЕ ЧЕРЕЗ ОПЦИЮ SDK. Набор опций у
+  // livekit-client меняется от версии к версии, а `getParameters/setParameters` - это
+  // сам стандарт WebRTC: он есть независимо от того, какую сборку подтянул CDN.
+  //
+  // И ПЕРЕЧИТЫВАЕМ (закон №35). Браузеры молча игнорируют часть полей: «мы попросили» и
+  // «применилось» - разные утверждения, а решение о качестве связи принимают по второму.
+  var PRIO = { asked: 0, got: 0, why: '' };
+
+  function senderOf(pub) {
+      //: У livekit-client отправитель лежит по-разному в разных сборках, поэтому
+      //: спрашиваем несколько мест и НЕ придумываем, если не нашли.
+      try {
+          if (!pub) return null;
+          if (pub.sender && pub.sender.getParameters) return pub.sender;
+          var t = pub.track;
+          if (t && t.sender && t.sender.getParameters) return t.sender;
+      } catch (e) {}
+      return null;
+  }
+
+  async function tunePriorities() {
+      //: -> строка словами. Голосу high, картинке low; у камеры жертвуем разрешением,
+      //: у показа - частотой (текст обязан остаться читаемым).
+      if (!room || !room.localParticipant) return '';
+      var pubs = [], m = room.localParticipant.trackPublications
+                      || room.localParticipant.tracks;
+      if (m && m.forEach) m.forEach(function (p) { pubs.push(p); });
+      var asked = 0, got = 0, notes = [];
+      for (var i = 0; i < pubs.length; i++) {
+          var pub = pubs[i], snd = senderOf(pub);
+          if (!snd || typeof snd.setParameters !== 'function') continue;
+          var kind = (pub.kind || (pub.track && pub.track.kind) || '').toString();
+          var isAudio = kind.indexOf('audio') >= 0;
+          var isScreen = String(pub.source || '').indexOf('screen') >= 0;
+          //: ЧТО ЭТО ЗА КАРТИНКА - ГОВОРИМ КОДЕКУ ПРЯМО, А НЕ НАДЕЕМСЯ, ЧТО ОН УГАДАЕТ.
+          //: `contentHint` - стандартная ручка WebRTC на самой дорожке: `detail` велит
+          //: беречь РЕЗКОСТЬ (жертвуя плавностью), `motion` - наоборот. Для показа экрана
+          //: это единственный способ поджать расход БЕЗ потери читаемости текста: тот же
+          //: битрейт начинает нести больше деталей вместо лишних кадров. У камеры ответ
+          //: обратный: лицо живое, и рваная картинка хуже мягкой.
+          //: СТАВИТСЯ РЯДОМ С `degradationPreference`, потому что это одно решение,
+          //: сказанное в двух местах: подсказка - кодеку, предпочтение - распределителю.
+          try {
+              var mst = pub.track && pub.track.mediaStreamTrack;
+              if (mst && 'contentHint' in mst) {
+                  mst.contentHint = isAudio ? 'speech' : (isScreen ? 'detail' : 'motion');
+              }
+          } catch (e) {}
+          var pr;
+          try { pr = snd.getParameters(); } catch (e) { continue; }
+          if (!pr || !pr.encodings || !pr.encodings.length) continue;
+          //: `degradationPreference` живёт НА ПАРАМЕТРАХ, а не в кодировке - это частая
+          //: ошибка, и поставленный не туда он молча не действует.
+          if (!isAudio) pr.degradationPreference = isScreen ? 'maintain-resolution'
+                                                            : 'maintain-framerate';
+          for (var e2 = 0; e2 < pr.encodings.length; e2++) {
+              pr.encodings[e2].priority = isAudio ? 'high' : 'low';
+              pr.encodings[e2].networkPriority = isAudio ? 'high' : 'low';
+          }
+          asked++;
+          try { await snd.setParameters(pr); } catch (err) {
+              notes.push((isAudio ? 'звук' : 'видео') + ': ' + ((err && err.name) || 'отказ'));
+              continue;
+          }
+          //: ПЕРЕЧИТЫВАЕМ У ТОГО ЖЕ ОТПРАВИТЕЛЯ. Браузер вправе согласиться и не сделать.
+          var back = null;
+          try { back = snd.getParameters(); } catch (e3) { back = null; }
+          var enc = back && back.encodings && back.encodings[0];
+          var want = isAudio ? 'high' : 'low';
+          if (enc && (enc.networkPriority === want || enc.priority === want)) got++;
+          else notes.push((isAudio ? 'звук' : 'видео') + ': приоритет не применился');
+      }
+      PRIO = { asked: asked, got: got, why: notes.join('; ') };
+      try { window.__PRIO = PRIO; } catch (e) {}
+      var line = 'приоритет: применён у ' + got + ' из ' + asked
+               + (notes.length ? ' (' + notes.join('; ') + ')' : '');
+      console.log('[rtc] ' + line);
+      return line;
+  }
+
+  // ═══ ЖИВЁТ НА ВЕРХНЕМ УРОВНЕ, А НЕ ВНУТРИ `go()` (закон №26 в JS) ═══
+  // Объявленная внутри, она была не видна модульным функциям, а зовут её и
+  // они (строка про слабый приём). Это ШЕСТОЙ случай класса на этом файле:
+  // `subSticky`, `subNote`, `dropDj`, `funPaint`, `iAmFunOff` - все были
+  // объявлены внутри и позваны снаружи, и каждый раз ReferenceError уносил
+  // ВСЁ, что регистрируется ниже. Чтением кода это не видно: обе строки на
+  // месте и обе выглядят верно.
+  function cut(x, n) {
+    var v = String(x == null ? '' : x);
+    if (v.length <= n) return v;
+    return v.slice(0, n) + '…(обрезано, всего ' + v.length + ' симв)';
+  }
+
   var AUDIO_WANT = { echoCancellation: true, noiseSuppression: true, autoGainControl: true,
                      voiceIsolation: true };
   //: Что обязано быть у ЛЮБОГО браузера. По этим трём судим строго; voiceIsolation -
@@ -908,6 +1040,59 @@
   //: Чинить его в SDK нечем, но НАМ не нужно гадать - мы сами эти операции и запускаем.
   //: Поэтому не стакаем: пока своя публикация в полёте, вторую не начинаем и ГОВОРИМ это.
   var PUB_BUSY = '';
+
+  //: ═══ СТАДИИ ПОКАЗА ЕДУТ В bot.log, А НЕ ТОЛЬКО НА ЭКРАН ЧЕЛОВЕКА ═══
+  //: ШЕСТОЙ ЗАХОД ПОДРЯД РАЗБОР УПИРАЛСЯ В ОДНО: человек говорит «дальше ничего», и
+  //: проверить это нечем. Стадии у нас посчитаны с 31.08, но живут в `console.log` и в
+  //: строке состояния - то есть ТОЛЬКО у того, кто держит телефон. На телефоне консоли
+  //: нет, скриншот приходит без неё, и каждый следующий заход начинается с пересказа.
+  //: ТЕПЕРЬ ЛЕНТА УХОДИТ БОТУ И ЛОЖИТСЯ В `bot.log` - в тот самый инструмент, которым мы
+  //: разбираем всё остальное (закон №1).
+  //:
+  //: ПАЧКОЙ, А НЕ ПО СТАДИИ: их до десятка на один тап, а у чужого ящика суточный лимит,
+  //: и запрос на каждую строку - это плата за диагностику, которую мы же и вводим ради
+  //: экономии времени. Копим и отправляем, когда стало тихо либо пришёл конец.
+  //:
+  //: ЧАСЫ - `performance.now()`, А НЕ `Date.now()`: у второго на телефоне бывает скачок
+  //: (синхронизация времени), и «стадия заняла минус две секунды» отправило бы разбор
+  //: искать несуществующее. Отметка - ОТ НАЧАЛА ТАПА, потому что вопрос всегда «где
+  //: встало», а не «который был час».
+  var DIAG_ON = (window.__DIAG !== 0);
+  var _dq = [], _dt = null, _d0 = 0, _dwhat = '';
+  function diagStart(what) { _d0 = _now(); _dwhat = what; _dq = []; }
+  function _now() {
+    try { return Math.round(performance.now()); } catch (e) { return Date.now(); }
+  }
+  function diag(line) {
+    if (!DIAG_ON) return;
+    try {
+      var ms = _d0 ? (_now() - _d0) : 0;
+      _dq.push('+' + ms + 'мс ' + line);
+      if (_dq.length > 40) _dq.shift();
+      clearTimeout(_dt);
+      _dt = setTimeout(diagFlush, 900);
+    } catch (e) {}
+  }
+  function diagFlush() {
+    clearTimeout(_dt); _dt = null;
+    var rows = _dq; _dq = [];
+    if (!rows.length) return;
+    //: ГОСТЬ БЕЗ TELEGRAM ОТПРАВИТЬ НЕ МОЖЕТ - ящик принимает только подпись. Это не
+    //: поломка, но и не тишина: пусть хоть в консоли будет видно, что лента собрана и
+    //: осталась здесь, иначе «диагностики нет» и «диагностика не уехала» неразличимы.
+    if (!initData) { try { console.log('[диаг] некому отправить (вход по ссылке):',
+                                       rows.join(' | ')); } catch (e) {} return; }
+    try {
+      fetch(API + '/signal', {
+        method: 'POST',
+        headers: { 'X-Init-Data': initData, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ kind: 'rtcdiag', room: ROOM, what: _dwhat,
+                               rows: rows.slice(0, 40) }),
+      }).then(function (r) {
+        if (!r.ok) console.warn('[диаг] ящик не принял: HTTP', r.status);
+      }, function (e) { console.warn('[диаг] не отправилось:', e); });
+    } catch (e) { try { console.warn('[диаг] не отправилось:', e); } catch (e2) {} }
+  }
   var room = null, people = {}, micOn = true, recOn = false, djOn = false,
       subOn = false;
   //: ═══ ШУМОДАВ: СОСТОЯНИЕ ЖИВЁТ СНАРУЖИ КОМНАТЫ, И ЭТО НЕ ВКУСОВЩИНА ═══
@@ -1087,6 +1272,103 @@
     } catch (e) {}
   }
 
+  // ═══ ВОЗВРАТ ИЗ ФОНА: iOS УСЫПЛЯЕТ ЗВУК, И ДО ЭТОЙ ПРАВКИ МЫ НЕ СЛУШАЛИ НИЧЕГО ═══
+  // ФАКТ ПО КОДУ: `visibilitychange` не встречался на странице НИ РАЗУ. А контекстов
+  // Web Audio у нас ЧЕТЫРЕ, и два из них стоят прямо в пути звука:
+  //   `voxCtx`  - усиление голосов. Наш же комментарий рядом говорит: включённый
+  //               однажды, он остаётся ЕДИНСТВЕННОЙ дорогой звука. Уснул - человек не
+  //               слышит НИКОГО, и выглядит это как «связь пропала».
+  //   `_own`    - RNNoise, путь МИКРОФОНА. Уснул - соседи не слышат ЕГО.
+  //   `_AC`     - звуки реакций; `WATCH.ctx` - детектор шума. Эти лишь перестают
+  //               работать сами, разговор не ломают.
+  // На iOS других движков нет (WebKit во всех браузерах), поэтому «попробуй другой
+  // браузер» здесь не совет, а отписка: чинить обязаны мы.
+  //
+  // ЖЕСТА ПРИ ВОЗВРАТЕ НЕТ. `visibilitychange` жестом не считается, и `resume()` вправе
+  // не сработать - поэтому проверяем ФАКТОМ (`ctx.state`), а не тем, что вызов вернулся,
+  // и не помогло - показываем ту же полосу «Включить звук», которая уже есть под жест.
+  // ═══ РЕЕСТР КОНТЕКСТОВ: ПЕРЕЧИСЛЯТЬ ИХ РУКОЙ В `wakeAudio` НЕЛЬЗЯ ═══
+  // Часть контекстов создаётся ВНУТРИ `go()` (детектор шума), и модульная функция их
+  // просто не видит - `try/catch` вокруг такого обращения превращает поломку в ТИШИНУ,
+  // а не в ошибку: будильник исправно «работает» и никого не будит. Поэтому контекст
+  // ЗАПИСЫВАЕТСЯ ПРИ СОЗДАНИИ, и будильник ходит по реестру, а не по памяти автора.
+  var AUDIO_CTXS = [];
+
+  function regCtx(ctx, name) {
+      //: -> тот же ctx (чтобы можно было писать `var c = regCtx(new Ctx(), 'имя')`).
+      try {
+          if (!ctx) return ctx;
+          for (var i = 0; i < AUDIO_CTXS.length; i++) {
+              if (AUDIO_CTXS[i].ctx === ctx) return ctx;
+          }
+          AUDIO_CTXS.push({ ctx: ctx, name: name });
+          try { window.__CTXS = AUDIO_CTXS.length; } catch (e) {}
+      } catch (e) {}
+      return ctx;
+  }
+
+  function wakeCtx(ctx, name, out) {
+      if (!ctx) return;
+      var st = '';
+      try { st = String(ctx.state || ''); } catch (e) { return; }
+      if (st !== 'suspended') { out.push(name + ':' + (st || '?')); return; }
+      try {
+          var r = ctx.resume();
+          if (r && r.then) r.then(function () {}, function () {});
+      } catch (e) {}
+      //: ПЕРЕЧИТЫВАЕМ ЧУТЬ ПОЗЖЕ: `resume()` может разрешиться, оставив контекст спящим
+      //: (у нас это уже ловилось на входе без жеста), и «позвали» тут не ответ.
+      setTimeout(function () {
+          var st2 = '';
+          try { st2 = String(ctx.state || ''); } catch (e) {}
+          console.log('[wake] ' + name + ': ' + st + ' -> ' + (st2 || '?'));
+      }, 250);
+      out.push(name + ':будим');
+  }
+
+  function wakeAudio(why) {
+      //: -> строка словами. Одна дверь на ВСЕ контексты: разбуди мы только тот, о котором
+      //: вспомнили, следующий остался бы спать, и симптом («звук рвётся после возврата»)
+      //: не изменился бы - то есть правка выглядела бы сделанной и не работала.
+      var out = [];
+      for (var ci = 0; ci < AUDIO_CTXS.length; ci++) {
+          try { wakeCtx(AUDIO_CTXS[ci].ctx, AUDIO_CTXS[ci].name, out); } catch (e) {}
+      }
+      //: ЗВУК КОМНАТЫ - ОТДЕЛЬНЫЙ ВОПРОС И СВОЙ КОНТРАКТ У LiveKit. Контексты Web Audio
+      //: к нему отношения не имеют: элементы <audio> могли встать сами по себе.
+      try { soundCheck(); } catch (e) {}
+      //: ЭЛЕМЕНТЫ МОГЛИ ВСТАТЬ НА ПАУЗУ - НА iOS ЭТО ШТАТНОЕ ПОВЕДЕНИЕ ПРИ УХОДЕ В ФОН.
+      //: «Дорожка подписана» и «элемент играет» - разные утверждения (закон №35).
+      var stuck = 0;
+      try {
+          var els = document.querySelectorAll('audio');
+          for (var i = 0; i < els.length; i++) {
+              if (!els[i].paused) continue;
+              stuck++;
+              var pr = els[i].play();
+              if (pr && pr.catch) pr.catch(function () {});
+          }
+      } catch (e) {}
+      var line = 'возврат (' + why + '): ' + (out.join(' · ') || 'контекстов нет')
+               + (stuck ? ' · на паузе было ' + stuck : '');
+      try { window.__WAKE = line; } catch (e) {}
+      console.log('[wake] ' + line);
+      return line;
+  }
+
+  try {
+      document.addEventListener('visibilitychange', function () {
+          if (document.hidden) return;
+          wakeAudio('вкладка снова видна');
+      });
+      //: `pageshow` ЛОВИТ ВОЗВРАТ ИЗ BFCACHE, КОТОРОГО `visibilitychange` НЕ ДАЁТ.
+      //: На iOS страница возвращается из кэша целиком, и без этого слушателя случай
+      //: «свернул на час, вернулся» остался бы непокрытым.
+      window.addEventListener('pageshow', function (e) {
+          if (e && e.persisted) wakeAudio('страница вернулась из кэша');
+      });
+  } catch (e) {}
+
   function attachTrack(track, isDjTrack) {
       var sid = String(track.sid || ('x' + Math.random()));
       detachTrack(track);               // второй элемент на ту же дорожку - двойной звук
@@ -1218,7 +1500,7 @@
       var Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) { voxWhy = 'браузер не умеет Web Audio'; return null; }
       try {
-          if (!voxCtx) voxCtx = new Ctx();
+          if (!voxCtx) voxCtx = regCtx(new Ctx(), 'голоса');
           var srcNode = voxCtx.createMediaElementSource(el);
           var g = voxCtx.createGain();
           srcNode.connect(g); g.connect(voxCtx.destination);
@@ -2232,6 +2514,236 @@
       + (q.rtt ? ', RTT ' + Math.round(q.rtt) + ' мс' : '') + (bad ? ' ⚠️' : '');
   }
 
+  // ═══ ЧТО СЛЫШУ И ВИЖУ Я САМ: МЕТРИКИ ПРИЁМА ═══
+  // ЖИВОЙ СЛУЧАЙ (боевой созвон 31.08): у Максима, который НЕ СЛЫШАЛ, строка показывала
+  // «0.0% потерь, джиттер 5 мс». Числа были верные и отвечали НЕ НА ТОТ ВОПРОС: снимок
+  // делает КАЖДЫЙ у себя, а отправляет боту ОДИН - админ. Значит «Максим: 0%» означало
+  // «АДМИН принял Максима чисто», то есть говорило про путь ЕГО ГОЛОСА НАРУЖУ и ничего -
+  // про то, что доходило ДО НЕГО. Про свой приём человек обязан узнать сам и от себя.
+  //
+  // ЧЕМ ВИДНЫ РЫВКИ. Потери и джиттер описывают ТРАНСПОРТ, а рвётся звук в ПЛЕЕРЕ:
+  // `concealedSamples` - это сэмплы, которых не было и которые кодек ДОРИСОВАЛ. Их доля
+  // от `totalSamplesReceived` и есть «сколько звука я на самом деле не услышал», и
+  // именно она отличает «шуршит» от «рвётся». Ни одна из прежних цифр её не показывала.
+  var RX_CONCEAL_BAD = 3;     // % дорисованного звука, выше которого это слышно
+  var RX_LOST_BAD = 3;        // % потерь на приёме
+  var RX_JBUF_BAD = 300;      // мс задержки буфера: столько уже слышно как отставание
+  var rxPrev = {};            // sid -> прошлые счётчики (считаем ЗА ОКНО, не от начала)
+  var rxLast = { bad: false, why: '', quiet: false, at: 0 };
+  var rxSaidAt = 0;
+  //: «ПОСАЖЕНО ЛИ ВИДЕО» - ЭТО ФАКТ РЕЕСТРА, А НЕ ОТДЕЛЬНЫЙ ФЛАГ (закон №35). Флаг
+  //: разъезжается с делом на первом же расхождении: дорожка ушла из комнаты, флаг
+  //: остался - и обратный путь «уже сделан».
+  function rxIsLow() { for (var k in rxLowSids) { if (rxLowSids[k]) return true; } return false; }
+
+  function rxPct(cur, prev, a, b) {
+      //: доля a от (a+b) ЗА ОКНО. Накопленный процент за час отвечает на другой вопрос:
+      //: одна плохая минута в начале не должна красить весь остаток.
+      var da = Math.max(0, (cur[a] || 0) - (prev[a] || 0));
+      var db = Math.max(0, (cur[b] || 0) - (prev[b] || 0));
+      return (da + db) ? (100 * da / (da + db)) : 0;
+  }
+
+  async function rxOnce() {
+      //: -> {bad, why, quiet, rows}. Мерит ВХОДЯЩИЕ дорожки: что дошло ДО МЕНЯ.
+      if (!room || !connected) return null;
+      var ps = [];
+      room.remoteParticipants.forEach(function (p) { ps.push(p); });
+      var rows = [], worst = '', bad = false, heard = 0, audios = 0;
+      for (var i = 0; i < ps.length; i++) {
+          var p = ps[i], pubs = [];
+          var m = p.trackPublications || p.tracks;
+          if (m && m.forEach) m.forEach(function (pub) { pubs.push(pub); });
+          for (var k = 0; k < pubs.length; k++) {
+              // ═══ КАЖДАЯ ДОРОЖКА, А НЕ ПЕРВАЯ ПОПАВШАЯСЯ ═══
+              // Прежний цикл делал `break` на первой, у которой нашлась статистика.
+              // У участника их две, и порядок нам не принадлежит: попадись первой
+              // видео - звук не мерился ВООБЩЕ, а строка выглядела полной.
+              var pub = pubs[k], t = pub && pub.track;
+              if (!t || typeof t.getRTCStatsReport !== 'function') continue;
+              var isAudio = String(pub.kind || t.kind || '').indexOf('audio') >= 0;
+              if (isAudio) audios++;
+              var rep = null;
+              try { rep = await t.getRTCStatsReport(); } catch (e) { rep = null; }
+              if (!rep || !rep.forEach) continue;
+              var cur = null;
+              rep.forEach(function (st) {
+                  if (st.type !== 'inbound-rtp') return;
+                  cur = {
+                      lost: Number(st.packetsLost || 0),
+                      recv: Number(st.packetsReceived || 0),
+                      conceal: Number(st.concealedSamples || 0),
+                      samples: Number(st.totalSamplesReceived || 0),
+                      jbuf: Number(st.jitterBufferDelay || 0),
+                      jemit: Number(st.jitterBufferEmittedCount || 0),
+                      lvl: Number(st.audioLevel || 0),
+                  };
+              });
+              if (!cur) continue;
+              var sid = (pub.trackSid || pub.sid || (p.identity + ':' + k));
+              var prev = rxPrev[sid] || {};
+              rxPrev[sid] = cur;
+              if (!Object.keys(prev).length) continue;   // первое окно - не с чем сравнить
+              var loss = rxPct(cur, prev, 'lost', 'recv');
+              var nm = (people[p.identity] && people[p.identity].name)
+                    || human(p.name, p.identity);
+              if (!isAudio) {
+                  if (loss > RX_LOST_BAD) {
+                      bad = true;
+                      rows.push(nm + ' (видео): ' + loss.toFixed(1) + '% потерь');
+                  }
+                  continue;
+              }
+              // ДОЛЯ ДОРИСОВАННОГО: вот это и есть «рвётся».
+              var conceal = rxPct(cur, prev, 'conceal', 'samples');
+              //: `jitterBufferDelay` - НАКОПЛЕННАЯ сумма в секундах, а не «текущая
+              //: задержка». Среднее по окну = прирост суммы / прирост числа кадров.
+              var dj = Math.max(0, cur.jbuf - (prev.jbuf || 0));
+              var de = Math.max(0, cur.jemit - (prev.jemit || 0));
+              var jms = de ? (1000 * dj / de) : 0;
+              if (cur.samples > (prev.samples || 0)) heard++;
+              var mine = [];
+              if (loss > RX_LOST_BAD) mine.push(loss.toFixed(1) + '% потерь');
+              if (conceal > RX_CONCEAL_BAD) mine.push('дорисовано ' + conceal.toFixed(1) + '%');
+              if (jms > RX_JBUF_BAD) mine.push('буфер ' + Math.round(jms) + ' мс');
+              if (mine.length) { bad = true; rows.push(nm + ': ' + mine.join(', ')); }
+              if (conceal > RX_CONCEAL_BAD && !worst) worst = nm;
+          }
+      }
+      // ═══ «МЕНЯ НЕ СЛЫШНО» И «Я НЕ СЛЫШУ» - РАЗНЫЕ БЕДЫ, И ВТОРАЯ ВИДНА ОТСЮДА ═══
+      // Все входящие звуковые дорожки без прироста сэмплов при живых соседях означают,
+      // что до меня не доходит НИЧЕЙ звук. Это не требует жалобы человека - это факт.
+      var quiet = (audios > 0 && heard === 0);
+      rxLast = { bad: bad, why: rows.join(' · '), quiet: quiet, at: Date.now(),
+                 worst: worst };
+      try { window.__RX = rxLast; } catch (e) {}
+      return rxLast;
+  }
+
+  //: КОГО ИМЕННО МЫ ПОСАДИЛИ. Возвращать надо РОВНО ИХ, а не всё видео подряд: у
+  //: остальных слой выбирает `adaptiveStream` по размеру плитки, и наш «возврат» стал бы
+  //: тихой отменой его работы - маленькое окно навсегда получало бы полное разрешение.
+  var rxLowSids = {};
+
+  function rxVidEl(pub) {
+      //: Плитка этой дорожки. `vids` - наш же реестр окон (`addVideo`).
+      var t = pub && pub.track;
+      if (!t) return null;
+      for (var i = 0; i < vids.length; i++) {
+          if (vids[i].t === t) { try { return vids[i].el.querySelector('video'); } catch (e) {} }
+      }
+      return null;
+  }
+
+  function rxEachRemoteVideo(fn) {
+      //: ОДИН ОБХОД НА ОБЕ СТОРОНЫ: две копии «как найти чужое видео» разошлись бы, и
+      //: обратный путь однажды пропустил бы дорожку, которую прямой посадил (закон №40).
+      if (!room) return 0;
+      var n = 0, ps = [];
+      room.remoteParticipants.forEach(function (p) { ps.push(p); });
+      for (var i = 0; i < ps.length; i++) {
+          var pubs = [], m = ps[i].trackPublications || ps[i].tracks;
+          if (m && m.forEach) m.forEach(function (pub) { pubs.push(pub); });
+          for (var k = 0; k < pubs.length; k++) {
+              var pub = pubs[k];
+              if (String(pub.kind || '').indexOf('video') < 0) continue;
+              var sid = String(pub.trackSid || (pub.track && pub.track.sid) || '');
+              if (!sid) continue;
+              try { if (fn(pub, sid)) n++; } catch (e) {}
+          }
+      }
+      return n;
+  }
+
+  function rxLowerVideo() {
+      //: САДИМСЯ НА НИЖНИЙ СЛОЙ, А НЕ ОТКАЗЫВАЕМСЯ ОТ ВИДЕО. Человек пришёл смотреть
+      //: показ экрана; отняв картинку целиком, мы решили бы за него. Simulcast для того
+      //: и включён - у дорожки есть слои LOW/MEDIUM/HIGH, и слабому каналу берётся LOW.
+      //: -> сколько дорожек посадили.
+      if (!room || !LOW_ON_BAD) return 0;
+      var Q = (LK.VideoQuality && LK.VideoQuality.LOW);
+      if (Q === undefined || Q === null) return 0;
+      var n = rxEachRemoteVideo(function (pub, sid) {
+          if (typeof pub.setVideoQuality !== 'function') return false;
+          pub.setVideoQuality(Q);
+          rxLowSids[sid] = 1;          //: помним ИМЕННО ЭТУ - вернём тоже её
+          return true;
+      });
+      if (n) console.log('[rtc] слабый приём: посадил ' + n + ' видео на нижний слой');
+      return n;
+  }
+
+  function rxRestoreVideo() {
+      //: ОБРАТНЫЙ ПУТЬ ОБЯЗАТЕЛЕН (закон №55). Связь выправилась - картинку возвращаем,
+      //: иначе один плохой десятисекундный отрезок навсегда оставлял бы человека с
+      //: мылом вместо показа, и понять почему он не смог бы ничем.
+      //:
+      //: ВОЗВРАЩАЕМ УПРАВЛЕНИЕ `adaptiveStream`, А НЕ ПРИБИВАЕМ К HIGH. У SDK эти два
+      //: способа исключают друг друга: заданное качество отменяет выбор по размеру
+      //: плитки, а заданный размер - выбор качества. Прибей мы HIGH, маленькое окно
+      //: после первого же плохого отрезка навсегда тянуло бы полное разрешение - то
+      //: есть «лечение» жгло бы полосу сильнее болезни. Размер берём у САМОГО элемента:
+      //: это ровно то, чем adaptiveStream и руководствуется.
+      if (!room) return 0;
+      var n = rxEachRemoteVideo(function (pub, sid) {
+          if (!rxLowSids[sid]) return false;      //: эту дорожку сажали не мы
+          var el = rxVidEl(pub);
+          var w = el && (el.clientWidth || el.videoWidth);
+          var h = el && (el.clientHeight || el.videoHeight);
+          if (typeof pub.setVideoDimensions === 'function' && w > 0 && h > 0) {
+              pub.setVideoDimensions({ width: Math.round(w), height: Math.round(h) });
+          } else if (typeof pub.setVideoQuality === 'function') {
+              //: ЗАПАСНОЙ ПУТЬ, И ЕГО ЦЕНА НАЗВАНА: размера нет (окно скрыто, метод у
+              //: этой сборки SDK отсутствует) - прибиваем HIGH. Это хуже адаптивного
+              //: выбора, но лучше, чем оставить человека с нижним слоем навсегда.
+              var Q = (LK.VideoQuality && LK.VideoQuality.HIGH);
+              if (Q === undefined || Q === null) return false;
+              pub.setVideoQuality(Q);
+          } else {
+              return false;
+          }
+          delete rxLowSids[sid];
+          return true;
+      });
+      if (n) console.log('[rtc] приём выправился: вернул ' + n + ' видео');
+      return n;
+  }
+
+  async function rxTick() {
+      //: ГОВОРИМ ЧЕЛОВЕКУ ПРО ЕГО СОБСТВЕННЫЙ ПРИЁМ, а не молчим при зелёных цифрах.
+      var r = null;
+      try { r = await rxOnce(); } catch (e) { r = null; }
+      if (!r) return;
+      var box = $('rxq');
+      if (r.quiet) {
+          //: ЭТО СИЛЬНЕЕ ЛЮБОЙ ЖАЛОБЫ: соседи публикуют звук, а до нас не доходит ничей.
+          if (box) box.textContent = 'Ты никого не слышишь: звук соседей до тебя не '
+                                   + 'доходит. Проверь связь или перезайди в комнату.';
+          if (box) box.style.display = '';
+          return;
+      }
+      if (r.bad) {
+          //: САЖАЕМ НА КАЖДОМ ПЛОХОМ ТИКЕ, А НЕ ОДИН РАЗ. Пока связь плохая, сосед может
+          //: включить камеру - при «уже посадили, больше не трогаем» его дорожка пришла бы
+          //: полным слоем ровно в тот момент, когда человеку и без неё тяжело.
+          rxLowerVideo();
+          if (box) {
+              box.textContent = 'Связь слабая, звук рвётся (' + cut(r.why, 90) + '). '
+                              + (rxIsLow() ? 'Видео убавил. ' : '')
+                              + 'Если не помогло - выключи камеру и показ экрана.';
+              box.style.display = '';
+          }
+          rxSaidAt = Date.now();
+          return;
+      }
+      //: ВЫПРАВИЛОСЬ - СНИМАЕМ И ГОВОРИМ ЭТО. Строка, которая осталась висеть после
+      //: того, как всё наладилось, читается как «до сих пор плохо».
+      if (rxIsLow()) rxRestoreVideo();
+      if (box && box.style.display !== 'none' && Date.now() - rxSaidAt > 8000) {
+          box.textContent = ''; box.style.display = 'none';
+      }
+  }
+
   async function statsOnce() {
     if (!room || !connected) return;
     var rows = [];
@@ -2304,6 +2816,9 @@
   var _statTick = 0;
   async function statTick() {
     var rows = await statsOnce();
+    // МОЙ ПРИЁМ СЧИТАЕТСЯ ТЕМ ЖЕ ТИКОМ, НО ЖИВЁТ ОТДЕЛЬНО: у него другой адресат (я, а
+    // не админ), другой вопрос (что дошло ДО меня) и другое действие (убавить видео).
+    try { await rxTick(); } catch (e) { console.warn('[rx] тик приёма:', e); }
     _statTick++;
     if (!initData || !iAmAdm || !rows || !rows.length || (_statTick % 6)) return;
     try {
@@ -2646,7 +3161,7 @@
     if (!_AC) {
       var C = window.AudioContext || window.webkitAudioContext;
       if (!C) return null;
-      try { _AC = new C(); } catch (e) { return null; }
+      try { _AC = regCtx(new C(), 'звуки'); } catch (e) { return null; }
       _MASTER = _AC.createGain();
       // ═══ УРОВЕНЬ: 0.5 БЫЛО ТИХО, И ЭТО ЖИВОЙ ОТЗЫВ, А НЕ ВКУС ═══
       // Реакция звучит ПОВЕРХ разговора, у которого своя громкость, - и «гонг и остальные
@@ -3157,6 +3672,35 @@
       // он не гонит крупную картинку туда, где её негде показать.
       adaptiveStream: true,
       dynacast: true,             // не гоняем дорожки туда, где их никто не слушает
+      // ═══ СВОИ ЧИСЛА ПУБЛИКАЦИИ, А НЕ ЧУЖИЕ УМОЛЧАНИЯ (закон №43) ═══
+      // ЖИВАЯ ЖАЛОБА (боевой созвон 31.08): у Максима звук пропадал РЫВКАМИ, пока шли
+      // камера и показ; выключили видео - стало нормально. То есть при нехватке полосы
+      // резалось всё подряд, включая голос.
+      // ДО ЭТОЙ ПРАВКИ `publishDefaults` У НАС НЕ БЫЛО ВООБЩЕ - ни битрейта, ни
+      // simulcast, ни приоритетов: всё ехало на умолчаниях livekit-client. Это ровно
+      // тот случай, ради которого записан закон №43: от чужого дефолта зависело,
+      // выйдет ли голос наружу, а нашего числа рядом не стояло.
+      publishDefaults: {
+        // SIMULCAST ОБЯЗАТЕЛЕН: без него у дорожки один слой, и слабому получателю
+        // нечего взять кроме полного - `adaptiveStream` остаётся без выбора.
+        simulcast: true,
+        // КАМЕРА: лицо в плитке размером с ладонь. 720p тут не читаемость, а расход:
+        // при нехватке полосы он отнимается у голоса, а разглядеть в плитке всё равно
+        // нечего. Потолок называем сами.
+        videoEncoding: { maxBitrate: VID_CAM_BR, maxFramerate: VID_CAM_FPS },
+        // ПОКАЗ ЭКРАНА: здесь решает ЧИТАЕМОСТЬ ТЕКСТА, а её держит РАЗРЕШЕНИЕ, не
+        // частота кадров. Поэтому битрейт выше камеры, а кадров мало: статичный слайд
+        // при 5 к/с читается так же, как при 30, и стоит вшестеро дешевле.
+        screenShareEncoding: { maxBitrate: VID_SCR_BR, maxFramerate: VID_SCR_FPS },
+        // ЧЕМ ЖЕРТВОВАТЬ, КОГДА ПОЛОСЫ НЕ ХВАТАЕТ. У камеры - разрешением (лицо
+        // остаётся живым), у показа - частотой (текст остаётся читаемым). Ровно
+        // противоположные ответы, и один на двоих был бы неверен для обоих.
+        degradationPreference: 'maintain-framerate',
+        // ЗВУК: 32 кбит/с речи хватает, и это НАШЕ число, а не то, что решит SDK.
+        audioPreset: { maxBitrate: AUD_BR },
+        dtx: true,                // в тишине не шлём ничего - полоса достаётся видео
+        red: true,                // избыточность речи: потеря пакета не даёт щелчка
+      },
       // ═══ ТРИ ФЛАГА ОБРАБОТКИ ЗВУКА - ОБЯЗАТЕЛЬНЫ ═══
       // Без echoCancellation комната с двух телефонов в одной комнате даёт вой; без
       // noiseSuppression в эфир едет кондиционер; без autoGainControl один участник
@@ -3222,6 +3766,11 @@
       // пометка держалась на ТЕКСТЕ от вызывающего, а не на признаке «моё»: подсадка
       // «своё окно без подписи» проходила МОЛЧА, потому что строка приезжала снаружи.
       if (t && t.kind === 'video') addVideo(t, '', true);
+      // ═══ ПРИОРИТЕТЫ СТАВЯТСЯ ПОСЛЕ КАЖДОЙ ПУБЛИКАЦИИ, А НЕ ОДИН РАЗ ПРИ ВХОДЕ ═══
+      // Отправитель появляется ВМЕСТЕ с дорожкой: поставь мы приоритет только на старте,
+      // включённая позже камера уехала бы с чужим умолчанием - то есть ровно в том
+      // случае, ради которого всё и делается (камера + показ у Максима).
+      tunePriorities().catch(function () {});
     });
     room.on(LK.RoomEvent.LocalTrackUnpublished, function (pub) {
       if (pub && pub.track) dropVideo(pub.track);
@@ -3801,7 +4350,22 @@ registerProcessor('rnn-denoise', RnnProc);
               // ПРОВЕРЯЕМ ФАКТ, А НЕ ПРОСЬБУ: часть браузеров молча отдаёт контекст на
               // своей частоте, проигнорировав аргумент, - и тогда мы получили бы ту же
               // поломку, только без сообщения.
-              if (_own.sampleRate === 48000) { ctx = _own; ownCtx = _own; }
+              // РЕГИСТРИРУЕМ ТОЛЬКО ПРИНЯТЫЙ: отвергнутый мы закрываем строкой ниже,
+              // и будить закрытый - значит копить в реестре мусор, который на каждом
+              // возврате из фона будет честно докладывать «closed».
+              //
+              // РЕЕСТР - УДОБСТВО БУДИЛЬНИКА, А НЕ УСЛОВИЕ РАБОТЫ ШУМОДАВА, И ПОРЯДОК
+              // СТРОК ЭТО ЗАКРЕПЛЯЕТ. Прежняя редакция писала `ctx = regCtx(...)`, то
+              // есть ставила диагностику НА ПУТИ звука: споткнись `regCtx` (её нет в
+              // этом окружении, она упала, её вынесли) - исключение уходило в общий
+              // `catch`, контекст оставался ВИСЕТЬ незакрытым, а человек слышал
+              // «браузер не дал пересчитать» про полностью исправный браузер. То же
+              // правило уже записано у замера приёма: не собрался прибор - теряем
+              // ОТЧЁТ, а не подавление.
+              if (_own.sampleRate === 48000) {
+                ctx = _own; ownCtx = _own;
+                try { regCtx(_own, 'шумодав'); } catch (e) {}
+              }
               else { try { _own.close(); } catch (e) {} }
             } catch (e) {
               // Браузер отказал в частоте - скажем об этом ниже, честной строкой.
@@ -4040,7 +4604,8 @@ registerProcessor('rnn-denoise', RnnProc);
       var t = micTrack();
       if (!t) return;
       try {
-        var ctx = new (window.AudioContext || window.webkitAudioContext)();
+        var ctx = regCtx(new (window.AudioContext || window.webkitAudioContext)(),
+                         'детектор шума');
         var an = ctx.createAnalyser();
         an.fftSize = 1024; an.smoothingTimeConstant = 0;
         var src = ctx.createMediaStreamSource(new MediaStream([t]));
@@ -4547,6 +5112,45 @@ registerProcessor('rnn-denoise', RnnProc);
         barLabel(btn, live ? '⏹' : offIcon, word);
       }
 
+      // ═══ КНОПКА ОЖИВАЕТ ПО ТАЙМЕРУ, А НЕ ТОЛЬКО В `finally` ═══
+      // `finally` возвращает её лишь тогда, когда работа ЗАВЕРШИЛАСЬ, - а весь этот класс
+      // багов про то, что она НЕ завершается. Страховка на секунду выше самого долгого
+      // нашего ожидания. Живой отказ Ren: кнопка серая до перезахода.
+      //
+      // ═══ ЧАСЫ ЗАВОДЯТСЯ НА НАШУ РАБОТУ, А НЕ НА РАЗДУМЬЕ ЧЕЛОВЕКА ═══
+      // Прежняя редакция ставила таймер ОДИН РАЗ, в момент тапа, на 29 секунд - а внутри
+      // лежало ожидание окна выбора длиной до ШЕСТИДЕСЯТИ.
+      // ЗДЕСЬ ЖЕ ЗАПИСАНА МОЯ СОБСТВЕННАЯ ОШИБКА В РАЗБОРЕ, ПОТОМУ ЧТО ЛОЖНЫЙ КОММЕНТАРИЙ
+      // ЗАКРЫВАЕТ РАЗБОР НАДЁЖНЕЕ, ЧЕМ ЕГО ОТСУТСТВИЕ. Сперва я написал, что сторож
+      // срабатывал посреди диалога и объявлял «клиент так и не ответил», зовя нажать ещё
+      // раз (а повторный тап во время ожидания - это `pickAbort`, то есть отмена выбора).
+      // ЭТО НЕВЕРНО, и проверено чтением прежней редакции, а не по памяти: первой строкой
+      // у сторожа стоит `if (!btn.disabled) return`, а на время ожидания диалога кнопка
+      // ЖИВА (`btn.disabled = false` + подпись «Отменить») - значит он выходил первой же
+      // строкой, ложной фразы не давал и нажать ещё раз не звал. Седьмой заход, пойдя за
+      // этим объяснением, искал бы строку, которой нет.
+      // ЧТО ЛОМАЛОСЬ НА САМОМ ДЕЛЕ, И ЭТО МЕНЬШЕ: одноразовый таймер у долго выбиравшего
+      // человека СГОРАЛ ВХОЛОСТУЮ на 29-й секунде, и дальше публикация шла БЕЗ страховки
+      // вовсе. Основной потолок публикации при этом работал, поэтому кнопка возвращалась;
+      // пропадал ровно тот запасной слой, который заведён под пути, которых мы ещё не
+      // нашли, - и пропадал он ИЗБИРАТЕЛЬНО, у тех, кто выбирал окно дольше всех.
+      // ЧЕСТНО ПРО ДОКАЗАННОСТЬ: наблюдаемой разницы в пробе у этой правки НЕТ - круг
+      // «долгое раздумье» зелен и на старом коде. Она остаётся ОБОСНОВАННЫМ намерением:
+      // страховка обязана покрывать нашу работу, а не сгорать на раздумье человека.
+      var _wake = null;
+      function wakeArm(ms) {
+        clearTimeout(_wake);
+        _wake = setTimeout(function () {
+          _wake = null;
+          if (!btn.disabled) return;
+          btn.disabled = false;
+          paint();
+          say('Кнопка «' + word + '» отвисла: клиент так и не ответил. Нажми ещё раз - '
+              + 'состояние у себя я вернул.', true);
+        }, ms || (PUB_WAIT_MS + 4000));
+      }
+      function wakeOff() { clearTimeout(_wake); _wake = null; }
+
       // ВЫКЛЮЧЕНИЕ - ТОЖЕ ОБРАЩЕНИЕ К SDK, И ОНО ВИСНЕТ РОВНО ТАК ЖЕ. Половина потолков
       // хуже, чем ни одного: она создаёт впечатление, что путь прикрыт.
       function sdkOff(ms) {
@@ -4589,11 +5193,34 @@ registerProcessor('rnn-denoise', RnnProc);
       // бы надеяться, что он их найдёт, - а цена ошибки видна СОСЕДЯМ, не нам.
       var myScreen = [];
 
+      //: ═══ ЧТО ИМЕННО МЫ ДЕРЖИМ В РУКАХ - ФАКТ, А НЕ «поток получен» ═══
+      //: «Дорожек 2» не отвечает ни на один вопрос разбора. Отвечают вид, метка
+      //: (у показа это имя окна или вкладки), состояние и то, не погасил ли её кто-то
+      //: между получением и публикацией: мёртвая дорожка публикуется молча и навсегда
+      //: остаётся чёрным квадратом у соседей.
+      function trackWord(t) {
+        try {
+          return (t.kind || '?') + '/' + (t.readyState || '?')
+               + '/«' + String(t.label || '').slice(0, 40) + '»'
+               + (t.muted ? '/muted' : '');
+        } catch (e) { return '?'; }
+      }
+      //: СОСТОЯНИЕ КОМНАТЫ РЯДОМ С КАЖДОЙ ПУБЛИКАЦИЕЙ: «встало на публикации» и «встало
+      //: на публикации, потому что соединение уже переподключалось» - разные починки, а
+      //: по одной строке они неразличимы.
+      function roomWord() {
+        try {
+          return 'room=' + String(room && room.state)
+               + ' сеть=' + (navigator.onLine ? 'есть' : 'НЕТ');
+        } catch (e) { return 'room=?'; }
+      }
+
       async function publishScreen(stream) {
         var st = await stream;   // промис взят ДО await'ов, здесь он уже без жеста
         var LK = window.LivekitClient || window.LiveKitClient || {};
         var SRC = (LK.Track && LK.Track.Source) || {};
         var tracks = st.getTracks ? st.getTracks() : [];
+        diag('дорожки: ' + tracks.map(trackWord).join(' + ') + ' · ' + roomWord());
         if (!tracks.length) throw new Error('пустой поток: браузер не отдал ни дорожки');
         myScreen = [];
         for (var i = 0; i < tracks.length; i++) {
@@ -4603,7 +5230,16 @@ registerProcessor('rnn-denoise', RnnProc);
           var src = (t.kind === 'audio')
             ? (SRC.ScreenShareAudio || 'screen_share_audio')
             : (SRC.ScreenShare || 'screen_share');
+          //: ═══ КАЖДАЯ ДОРОЖКА ОТДЕЛЬНОЙ СТРОКОЙ, И ЭТО НЕ ПОДРОБНОСТЬ РАДИ ПОДРОБНОСТИ
+          //: Публикаций тут ДВЕ (картинка и звук вкладки), они идут ПОСЛЕДОВАТЕЛЬНО, и
+          //: у SDK каждая - своя негоциация. «Публикация не прошла» без номера дорожки
+          //: не говорит, встало на первой или на второй, а это разные причины: на первой
+          //: - соединение, на второй - очередь за собственной первой.
+          diag('публикую ' + (i + 1) + '/' + tracks.length + ' ' + src + ' ' + trackWord(t));
+          var _t0 = _now();
           var pubd = await room.localParticipant.publishTrack(t, { source: src });
+          diag('опубликована ' + (i + 1) + '/' + tracks.length + ' за '
+               + (_now() - _t0) + 'мс · ' + roomWord());
           myScreen.push(pubd || t);
         }
         // ЧЕЛОВЕК ЗАКРЫЛ ПОКАЗ СРЕДСТВАМИ БРАУЗЕРА («Остановить доступ») - У НАС ЭТО
@@ -4714,6 +5350,15 @@ registerProcessor('rnn-denoise', RnnProc);
       function showStage(what) {
         try { console.log('[показ] ' + what); } catch (e) {}
         try { window.__STAGE = (window.__STAGE || []); window.__STAGE.push(what); } catch (e) {}
+        //: ═══ ТА ЖЕ СТАДИЯ УХОДИТ В bot.log ═══
+        //: Первая стадия ОТКРЫВАЕТ ленту (обнуляет часы), последняя её ЗАКРЫВАЕТ - иначе
+        //: отправка ждала бы тишины ещё секунду после того, как всё уже кончилось, а
+        //: человек в это время успевает тапнуть снова.
+        try {
+          if (String(what).split(':')[0] === 'запросил экран') diagStart('показ');
+          diag(what);
+          if (String(what).split(':')[0] === 'опубликовано') diagFlush();
+        } catch (e) {}
         try {
           var head = String(what).split(':')[0];
           if (head === 'поток получен') {
@@ -4762,7 +5407,68 @@ registerProcessor('rnn-denoise', RnnProc);
         };
       }
 
-      async function startShow(gotStream) {
+      //: ═══ ПОВТОР ТЕМ ЖЕ ПОТОКОМ: ОКНО УЖЕ ВЫБРАНО, ВЫБИРАТЬ ЗАНОВО НЕЧЕГО ═══
+      //: ТРЕБОВАНИЕ REN (6-й заход): «поток получен, а публикация не идёт - сказать это
+      //: словами и предложить повтор, не оставляя серую кнопку». Сегодня отказ гасил
+      //: захват, и человек шёл в диалог по второму кругу - а диалог как раз и есть то
+      //: место, где половина попыток и теряется.
+      //: ДЕРЖИМ ОГРАНИЧЕННО И ГОВОРИМ, КОГДА ОТПУСТИЛИ. Незакрытый захват - это «идёт
+      //: доступ к экрану» в браузере над комнатой, где ничего не показывается: висеть
+      //: вечно он не имеет права, а исчезнуть молча - тем более.
+      var RETRY_KEEP_MS = 90000;
+      var _retryBtn = null, _retryTimer = null;
+      function dropRetry(stream, why) {
+        clearTimeout(_retryTimer); _retryTimer = null;
+        if (_retryBtn) { _retryBtn.style.display = 'none'; }
+        if (stream && stream.getTracks) {
+          try { stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e) {} }); }
+          catch (e) {}
+        }
+        if (why) say(why, true);
+      }
+      function offerShowRetry(stream) {
+        //: ПРЕДЛАГАЕМ, ТОЛЬКО ЕСЛИ ЕСТЬ ЧТО ПОВТОРИТЬ. Мёртвую дорожку публиковать
+        //: бессмысленно: у соседей она станет чёрным квадратом, а человек решит, что
+        //: показ идёт (закон №35 - проверяем ФАКТ, а не то, что поток у нас в руке).
+        var vt = null;
+        try { vt = stream && stream.getVideoTracks ? stream.getVideoTracks()[0] : null; }
+        catch (e) { vt = null; }
+        if (!vt || vt.readyState !== 'live') { dropRetry(stream, ''); return false; }
+        var host = $('showhint');
+        if (!host) { dropRetry(stream, ''); return false; }
+        if (!_retryBtn) {
+          _retryBtn = document.createElement('button');
+          _retryBtn.id = 'showretry';       //: чтобы реестр переключателей её ВИДЕЛ
+          _retryBtn.className = 'wide';
+          host.appendChild(_retryBtn);
+        }
+        _retryBtn.textContent = '🔁 Повторить показ (окно уже выбрано)';
+        _retryBtn.style.display = '';
+        _retryBtn.onclick = async function () {
+          _retryBtn.style.display = 'none';
+          clearTimeout(_retryTimer); _retryTimer = null;
+          diagStart('показ-повтор');
+          diag('повтор тем же потоком: ' + trackWord(vt) + ' · ' + roomWord());
+          btn.disabled = true; wakeArm();
+          try {
+            PUB_BUSY = word;
+            await startShow(Promise.resolve(stream), true);
+          } finally {
+            if (PUB_BUSY === word) PUB_BUSY = '';
+            wakeOff(); paint(); btn.disabled = false;
+          }
+        };
+        clearTimeout(_retryTimer);
+        _retryTimer = setTimeout(function () {
+          dropRetry(stream, 'Отпустил экран - он висел выбранным, но не показанным. '
+                          + 'Нажми «Экран» ещё раз, окно придётся выбрать заново.');
+        }, RETRY_KEEP_MS);
+        return true;
+      }
+
+      //: `again` - ПОВТОР УЖЕ ВЗЯТЫМ ПОТОКОМ: окно выбрано, диалога не будет, и ждать его
+      //: (вместе со всей веткой отмены) значило бы ждать того, чего не случится.
+      async function startShow(gotStream, again) {
         var lost = false, pub = null;
         // ═══ ПОКАЗ УЖЕ ИДЁТ - ГОВОРИМ ЭТО, А НЕ МОЛЧИМ ═══
         // Живой случай 29.08: человек открыл комнату с двух своих клиентов, показ пошёл с
@@ -4785,7 +5491,15 @@ registerProcessor('rnn-denoise', RnnProc);
           }
         }
         var stream = null;
-        if (kind === 'screen') {
+        //: ═══ ПОВТОР ИДЁТ МИМО ДИАЛОГА: ЕГО УЖЕ ПРОШЛИ ═══
+        //: Без этой ветки повтор снова ждал бы окно выбора шестьдесят секунд и сдался бы
+        //: «диалог не открылся» - про диалог, которого мы и не просили.
+        if (kind === 'screen' && again) {
+          try { stream = await gotStream; } catch (e) { stream = null; }
+          if (!stream) { say('Поток потерялся - нажми «Экран» ещё раз.', true); return; }
+          showStage('поток получен (повтор): дорожек '
+                    + (stream.getTracks ? stream.getTracks().length : '?'));
+        } else if (kind === 'screen') {
           showStage('запросил экран');
           // МЯГКАЯ ПОДСКАЗКА НИЧЕГО НЕ ОТМЕНЯЕТ: она отвечает на вопрос «а оно вообще
           // работает?», который человек задаёт себе на седьмой секунде тишины.
@@ -4797,6 +5511,9 @@ registerProcessor('rnn-denoise', RnnProc);
           // ПОКА ЖДЁМ ДИАЛОГ, КНОПКА ЖИВА И НАЗЫВАЕТ, ЧТО СДЕЛАЕТ ТАП.
           btn.disabled = false;
           barLabel(btn, '✖️', 'Отменить');
+          //: СТОРОЖ КНОПКИ СНЯТ НА ВРЕМЯ РАЗДУМЬЯ ЧЕЛОВЕКА - см. `wakeArm`. Здесь ждём
+          //: НЕ клиента, а его, и выход у него есть: та же кнопка, подписанная «Отменить».
+          wakeOff();
           try {
             stream = await Promise.race([gotStream, new Promise(function (_, rej) {
               pickAbort = function () {
@@ -4810,6 +5527,8 @@ registerProcessor('rnn-denoise', RnnProc);
             })]);
             pickAbort = null; btn.disabled = true; paint();
             clearTimeout(_hint);
+            //: ОКНО ВЫБРАНО - НАЧАЛАСЬ НАША РАБОТА, ЗАВОДИМ ЧАСЫ ЗАНОВО.
+            wakeArm();
             showStage('поток получен: дорожек ' + (stream.getTracks ? stream.getTracks().length : '?'));
           } catch (e) {
             pickAbort = null; btn.disabled = true;
@@ -4824,6 +5543,17 @@ registerProcessor('rnn-denoise', RnnProc);
               }, function () {});
             } catch (e3) {}
             var _cancel = (e && (e.name === 'NotAllowedError' || e.name === 'AbortError'));
+            //: ═══ ОТКАЗ УЛЕТАЕТ В ЛОГ ТОЖЕ, И ЭТО ГЛАВНАЯ ПОЛОВИНА ═══
+            //: Отправлять только успех значило бы собрать ленту ровно про те прогоны,
+            //: которые и так работают, - охрана пустоты в самой диагностике. Причина
+            //: НАЗЫВАЕТСЯ словом, а не именем исключения: «человек нажал Отмену»,
+            //: «диалог не открылся за минуту» и «браузер отказал» - три разные починки.
+            diag('окно выбора не дало потока: ' + (_quit ? 'отменено тапом'
+                 : _cancel ? 'человек закрыл окно выбора'
+                 : _late ? 'диалог не открылся за ' + Math.round(SCREEN_PICK_MS / 1000) + ' с'
+                 : ((e && e.name || 'ошибка') + ': ' + (e && e.message || e)))
+                 + ' · ' + roomWord());
+            diagFlush();
             if (_quit) { say('Отменил ожидание окна выбора.', true); return; }
             if (_cancel) { say('Показ отменён - окно не выбрано.', true); return; }
             if (_late) { sayNoPicker(); return; }
@@ -4856,8 +5586,22 @@ registerProcessor('rnn-denoise', RnnProc);
             }, PUB_WATCHDOG_MS);
           })]);
           live = true; say('');
+          //: ПОЛУЧИЛОСЬ - ПРЕДЛОЖЕНИЕ ПОВТОРА УБИРАЕМ, НО ПОТОК НЕ ТРОГАЕМ: он теперь
+          //: публикуется, и `dropRetry` погасил бы ровно то, что сейчас видят соседи.
+          clearTimeout(_retryTimer); _retryTimer = null;
+          if (_retryBtn) _retryBtn.style.display = 'none';
           if (kind === 'screen') showStage('опубликовано');
         } catch (e) {
+          //: ПУБЛИКАЦИЯ НЕ СОСТОЯЛАСЬ - ЭТО ТОТ САМЫЙ ПРОМЕЖУТОК, РАДИ КОТОРОГО ЛЕНТА И
+          //: ЗАВЕДЕНА. `lost` отличает «сдались по нашему сторожу, операция ещё идёт» от
+          //: «SDK честно отказал», и это разные починки: первое - очередь или негоциация,
+          //: второе - права, кодек, состояние соединения.
+          try {
+            diag((lost ? 'СТОРОЖ: публикация не ответила' : 'публикация отказала') + ': '
+                 + (e && e.name || 'ошибка') + ': ' + (e && e.message || e)
+                 + ' · ' + roomWord());
+            diagFlush();
+          } catch (e8) {}
           if (lost) {
             // ОПЕРАЦИЯ ВСЁ ЕЩЁ ИДЁТ ВНУТРИ SDK. Просим ЕГО ЖЕ её свернуть - тем самым
             // методом, которым включали: только он умеет снять состояние «публикуется».
@@ -4884,12 +5628,19 @@ registerProcessor('rnn-denoise', RnnProc);
             try { await sdkOff(4000); } catch (e2) {}
           }
           stopLocalMedia(kind);          // чтобы неудача не оставила захват висеть
-          // ═══ ВЗЯТЫЙ ПОТОК ГАСИМ, ТОЛЬКО КОГДА ПУБЛИКАЦИЯ ТОЧНО НЕ СОСТОИТСЯ ═══
+          // ═══ ВЗЯТЫЙ ПОТОК ГАСИМ, ТОЛЬКО КОГДА ПОВТОРЯТЬ ИМ БОЛЬШЕ НЕЧЕГО ═══
           // ПОДОЗРЕНИЕ REN БЫЛО ВЕРНЫМ: на пути СТОРОЖА (`lost`) публикация ещё ИДЁТ и
           // может доехать, а мы уже гасили дорожку - то есть сами убивали живой захват и
-          // делали повторную попытку заведомо бессмысленной. Теперь на этом пути поток
-          // остаётся, а поздно доехавшую публикацию снимает `pub.then` выше.
-          if (!lost && stream && stream.getTracks) {
+          // делали повторную попытку заведомо бессмысленной.
+          // ТЕПЕРЬ ШИРЕ: поток, который ещё жив, - это ВЫБРАННОЕ ОКНО, и выбрасывать его
+          // значит отправить человека во второй раз туда, где половина попыток и теряется
+          // (требование Ren, 6-й заход). Держим и предлагаем повтор; не пригодился -
+          // отпускаем сами и ГОВОРИМ об этом (см. `offerShowRetry`).
+          var _kept = false;
+          if (kind === 'screen' && stream) {
+            try { _kept = offerShowRetry(stream); } catch (e5) { _kept = false; }
+          }
+          if (!_kept && !lost && stream && stream.getTracks) {
             try { stream.getTracks().forEach(function (t) { try { t.stop(); } catch (e5) {} }); }
             catch (e6) {}
           }
@@ -4958,18 +5709,7 @@ registerProcessor('rnn-denoise', RnnProc);
           } catch (e) { _screen = Promise.reject(e); }
         }
         btn.disabled = true;
-        // ═══ КНОПКА ОЖИВАЕТ ПО ТАЙМЕРУ, А НЕ ТОЛЬКО В `finally` ═══
-        // `finally` возвращает её лишь тогда, когда работа ЗАВЕРШИЛАСЬ, - а весь этот
-        // класс багов про то, что она НЕ завершается. Потолки внутри стоят, но правило
-        // должно держаться и на пути, который мы ещё не нашли: страховка на секунду выше
-        // самого долгого ожидания. Живой отказ Ren: кнопка серая до перезахода.
-        var _wake = setTimeout(function () {
-          if (!btn.disabled) return;
-          btn.disabled = false;
-          paint();
-          say('Кнопка «' + word + '» отвисла: клиент так и не ответил. Нажми ещё раз - '
-              + 'состояние у себя я вернул.', true);
-        }, PUB_WAIT_MS + 4000);
+        wakeArm();
         try {
           PUB_BUSY = word;
           if (live) await stopShow(); else await startShow(_screen);
@@ -4979,7 +5719,7 @@ registerProcessor('rnn-denoise', RnnProc);
         } finally {
           // ═══ КНОПКА ВОЗВРАЩАЕТСЯ В СОСТОЯНИЕ, СООТВЕТСТВУЮЩЕЕ `live`, ВСЕГДА ═══
           if (PUB_BUSY === word) PUB_BUSY = '';
-          clearTimeout(_wake);
+          wakeOff();
           paint();
           btn.disabled = false;
         }
@@ -5319,11 +6059,6 @@ registerProcessor('rnn-denoise', RnnProc);
     //: ssh (`str(e)[:140]`) и путь файла записи (`str(e)[:80]`).
     //: ПРАВИЛО: показываем СТОЛЬКО, сколько влезает, и НАЗЫВАЕМ, что обрезали и сколько
     //: было. Тогда «строка кончилась» и «мы её укоротили» перестают быть неразличимы.
-    function cut(x, n) {
-      var v = String(x == null ? '' : x);
-      if (v.length <= n) return v;
-      return v.slice(0, n) + '…(обрезано, всего ' + v.length + ' симв)';
-    }
 
     function symOk(x) {
       var v = String(x || '').toUpperCase().replace(/[^A-Z0-9:_.\-]/g, '').slice(0, 24);
