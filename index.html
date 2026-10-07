@@ -782,7 +782,7 @@
   }
   if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
 
-  var VERSION = 'f9a999c296a7';
+  var VERSION = '7dd35c8b1b94';
   // ═══ ДОГОВОР, А НЕ ВЕРСИЯ ═══
   // Версия меняется на каждой правке страницы и значит «есть свежее». Договор - это
   // ФОРМАТ провода: форма токена, имена ручек, поля ответа. Он поднимается ТОЛЬКО когда
@@ -1563,6 +1563,18 @@
       if (initData) return { 'X-Init-Data': initData,
                              'Content-Type': 'application/json' };
       return null;
+  }
+  function _actAuth() {
+      //: ═══ ДВЕРЬ ДЕЙСТВИЙ: ТОЛЬКО ПОДПИСЬ TELEGRAM ═══
+      //: -> заголовки либо null. ЭТО НЕ ВТОРАЯ КОПИЯ `_sigAuth`, а другое ТРЕБОВАНИЕ, и
+      //: держать их врозь - смысл, а не недоделка: телеметрия односторонняя и гостю
+      //: разрешена, а запись, эфир и шумодав всей комнате - нет. Веб-токен доказывает
+      //: право БЫТЬ В КОМНАТЕ и ничего больше.
+      //: ЗАЧЕМ ОТДЕЛЬНАЯ ФУНКЦИЯ, А НЕ СТРОКА ПО МЕСТУ: требование одно на ПАРУ
+      //: `ask`+`waitRec` (положить просьбу и забрать ответ), и две копии разъехались бы -
+      //: аудит 06.10 нашёл ровно это, причём вторая копия отставала молча (закон №40).
+      if (!initData) return null;
+      return { 'X-Init-Data': initData, 'Content-Type': 'application/json' };
   }
   function _diagSend(what, rows) {
     if (!rows.length) return;
@@ -3471,22 +3483,110 @@
     slotsPaint();
   }
 
+  //: ═══ СЛОТЫ: ОДНА ДВЕРЬ, ДВА ХРАНИЛИЩА (решение Ren 06.10) ═══
+  //: ЧТО БЫЛО. Страница звала `rtclay` у бота ВСЕГДА, в том числе САМА при входе
+  //: (`lay_list`), а ящик принимает только подпись Telegram - веб-гость получал 401 на
+  //: ровном месте, ничего не нажимая. Нашёл это прогон с живым браузером 06.10.
+  //: ПОЧЕМУ ГОСТЮ СВОИ СЛОТЫ, А НЕ СЕРВЕРНЫЕ. Три независимые причины, каждой довольно:
+  //: `rtc_layout.uid` это INTEGER (ключ гостя дал бы `ValueError`, то есть НАШУ поломку
+  //: под видом «не сохранилось», закон №68а); таблица стоит в реестре `/delete_me` по той
+  //: же колонке (закон №12, инвариант dr01), а до псевдонимной строки `/delete_me` не
+  //: дотягивается; и ключ гостя МЕНЯЕТСЯ КАЖДЫЕ СУТКИ (HMAC от nonce ссылки и даты UTC) -
+  //: серверный слот пропал бы в полночь МОЛЧА.
+  //: Смысл серверных слотов - кроссдевайс («расставил на ноутбуке, открыл с планшета»), а
+  //: у гостя такой личности нет по построению: его личность и есть nonce ссылки. Поэтому
+  //: локальное хранилище это не упрощение, а единственное место, где его слоты ЖИВУТ.
+  //: ПОЧЕМУ ОДНА ДВЕРЬ, А НЕ ВЕТКА В КАЖДОЙ ИЗ ЧЕТЫРЁХ ОПЕРАЦИЙ: две копии правила
+  //: расходятся всегда (закон №40), а здесь их было бы четыре. Хранилище выбирается В
+  //: ОДНОМ месте, и ОБА отдают ОДНУ форму ответа (`slots`/`lay`/`mode`/`note`) - поэтому
+  //: `slotsFrom` и `slotLoad` про существование гостя не знают вовсе.
+  var LAY_KEY = 'rtc_slots';
+  var LAY_MAX = 8;                 //: столько же, сколько держит серверная сторона
+  function layWeb() {
+    //: ТОТ ЖЕ ФАКТ, ЧТО У `_sigAuth`, И ПО ТОЙ ЖЕ ПРИЧИНЕ: спрашивать «пустой ли
+    //: initData» нельзя - Telegram отдаёт его и в обычном браузере, негодным.
+    try { return !!(LAST_TOK && LAST_TOK.web); } catch (e) { return false; }
+  }
+  function layMine() {
+    try { return JSON.parse(localStorage.getItem(LAY_KEY) || '{}') || {}; }
+    catch (e) { return {}; }
+  }
+  function laySlotsLocal(body) {
+    //: -> та же форма, что отдаёт бот. Отказ едет в `note`, как у него же: иначе
+    //: вызывающему пришлось бы знать, с кем он говорил.
+    //: ИМЯ ПОДРЕЗАЕТСЯ ПО КРАЯМ, И ЭТО НЕ КОСМЕТИКА: `String('  ').slice(0, 40)` - строка
+    //: ИСТИННАЯ, поэтому слот из пробелов сохранялся молча и в списке выглядел пустой
+    //: кнопкой. Серверная половина делает `.strip()`, и расхождение здесь означало бы два
+    //: разных правила имени у одной и той же операции (поймано rtc43).
+    var act = body.act, nm = String(body.nm2 || '').trim().slice(0, 40);
+    var all = layMine();
+    if (act === 'lay_list') return { slots: Object.keys(all) };
+    if (act === 'lay_save') {
+      if (!nm) return { note: 'У раскладки нет имени - по чему её потом искать.' };
+      //: ПОТОЛОК ВЫТЕСНЯЕТ САМУЮ СТАРУЮ, А НЕ ОТКАЗЫВАЕТ - так же, как на сервере.
+      var ks = Object.keys(all);
+      if (!all[nm] && ks.length >= LAY_MAX) {
+        delete all[ks.sort(function (a, b) {
+          return (all[a].saved || 0) - (all[b].saved || 0);
+        })[0]];
+      }
+      all[nm] = { lay: body.lay || '{}', mode: body.mode || 'free',
+                  saved: Math.round(Date.now() / 1000) };
+      try { localStorage.setItem(LAY_KEY, JSON.stringify(all)); } catch (e) {
+        return { note: 'Не смог сохранить у себя: ' + ((e && e.name) || e)
+                       + '. Похоже, в браузере нет места.' };
+      }
+      //: READ-BACK ОБЯЗАТЕЛЕН И ЗДЕСЬ, как на серверной половине: «записали» и «это
+      //: лежит» разные утверждения, а человеку мы говорим второе. В приватном окне
+      //: `setItem` молчит, а запись не живёт (закон №35).
+      if (!layMine()[nm]) {
+        return { note: 'Сохранить не вышло: браузер не отдал запись назад. В приватном '
+                       + 'окне раскладки не живут.' };
+      }
+      return { note: 'Раскладка «' + nm + '» сохранена у тебя в браузере.',
+               slots: Object.keys(layMine()) };
+    }
+    if (act === 'lay_load') {
+      var one = all[nm];
+      //: «НЕ НАШЛОСЬ» СЛОВАМИ, А НЕ ПУСТОЙ РАССТАНОВКОЙ - тот же довод, что у бота.
+      if (!one) return { note: 'Раскладки «' + nm + '» у тебя нет.' };
+      return { lay: one.lay, mode: one.mode || 'free' };
+    }
+    if (act === 'lay_drop') {
+      delete all[nm];
+      try { localStorage.setItem(LAY_KEY, JSON.stringify(all)); } catch (e) {}
+      return { note: 'Убрал «' + nm + '».', slots: Object.keys(layMine()) };
+    }
+    return { note: 'Непонятное действие с раскладкой.' };
+  }
+  async function slotsAsk(body, hint) {
+    //: ЕДИНСТВЕННОЕ МЕСТО, ГДЕ РЕШАЕТСЯ «КТО ХРАНИТ».
+    if (layWeb()) {
+      var loc = laySlotsLocal(body);
+      if (loc && loc.note) say(loc.note);
+      return loc;
+    }
+    if (!roomAsk) {
+      say('Ещё подключаюсь - слоты будут через секунду.', true);
+      return null;
+    }
+    return await roomAsk(body, hint);
+  }
+
   async function slotSave() {
-    if (!roomAsk) { say('Ещё подключаюсь - слоты будут через секунду.', true); return; }
     var nm = await askText('Как назвать раскладку?', 'например «планёрка»');
     if (!nm) return;
     // ШЛЁМ ТО, ЧТО ПРАВДА СТОИТ НА ЭКРАНЕ. Собрать «как должно быть» отдельной формулой
     // значило бы завести второй ответ на вопрос «где лежат окна» (закон №40).
-    var res = await roomAsk({ kind: 'rtclay', room: ROOM, act: 'lay_save', nm2: nm,
-                             mode: layMode, lay: JSON.stringify(layFree) },
-                            'Сохраняю раскладку…');
+    var res = await slotsAsk({ kind: 'rtclay', room: ROOM, act: 'lay_save', nm2: nm,
+                              mode: layMode, lay: JSON.stringify(layFree) },
+                             'Сохраняю раскладку…');
     slotsFrom(res);
   }
 
   async function slotLoad(nm) {
-    if (!roomAsk) { say('Ещё подключаюсь - слоты будут через секунду.', true); return; }
-    var res = await roomAsk({ kind: 'rtclay', room: ROOM, act: 'lay_load', nm2: nm },
-                            'Загружаю раскладку…');
+    var res = await slotsAsk({ kind: 'rtclay', room: ROOM, act: 'lay_load', nm2: nm },
+                             'Загружаю раскладку…');
     if (!res || !res.lay) return;                 // причину бот уже назвал сам
     var lay = null;
     try { lay = JSON.parse(res.lay); } catch (e) { lay = null; }
@@ -3503,9 +3603,8 @@
   }
 
   async function slotDrop(nm) {
-    if (!roomAsk) return;
-    var res = await roomAsk({ kind: 'rtclay', room: ROOM, act: 'lay_drop', nm2: nm },
-                            'Убираю раскладку…');
+    var res = await slotsAsk({ kind: 'rtclay', room: ROOM, act: 'lay_drop', nm2: nm },
+                             'Убираю раскладку…');
     slotsFrom(res);
   }
 
@@ -10264,7 +10363,11 @@ registerProcessor('rnn-denoise', RnnProc);
       if (b) b.onclick = slotSave;
       slotsPaint();
       if (!freeOk()) return;              // на мобиле слотов нет вовсе - незачем и спрашивать
-      ask({ kind: 'rtclay', room: ROOM, act: 'lay_list' }, 'Смотрю сохранённые раскладки…')
+      //: ЧЕРЕЗ `slotsAsk`, А НЕ `ask` НАПРЯМУЮ, И ЭТО НЕСУЩЕЕ. Прямой вызов шёл в ящик
+      //: ВСЕГДА - у веб-гостя он ловил 401 при входе, хотя гость ничего не нажимал. Своё
+      //: хранилище спрашивать некого и незачем: ответ мгновенный и локальный.
+      slotsAsk({ kind: 'rtclay', room: ROOM, act: 'lay_list' },
+               'Смотрю сохранённые раскладки…')
         .then(slotsFrom).catch(function () {});
     })();
     function nameOf(p) {
@@ -11931,9 +12034,26 @@ registerProcessor('rnn-denoise', RnnProc);
     // `bad_kind`, а вторая продолжала бы показывать человеку машинный код (закон №40).
     async function ask(body, hint) {
       try {
+        //: ДОКАЗАТЕЛЬСТВО ПРАВА СЧИТАЕТ `_actAuth` - ОДНА ДВЕРЬ НА ПАРУ `ask`+`waitRec`.
+        //: ПОЧЕМУ НЕ `_sigAuth`, ХОТЯ СОБЛАЗН БЫЛ: это ДРУГОЕ требование, а не копия.
+        //: Телеметрия односторонняя, её гостю можно; `ask` - дверь ДЕЙСТВИЙ (запись,
+        //: эфир, шумодав всей комнате), и веб-токен доказывает только право БЫТЬ В
+        //: КОМНАТЕ. Подставив сюда `_sigAuth`, я снял страничную половину защиты и
+        //: оставил одну серверную - поймано rtc42, ровно за этим он и стоял (закон №51:
+        //: две защиты от одной лжи проверяются вместе).
+        //: ЧТО ПОЧИНЕНО ВСЁ-ТАКИ: прежде здесь слался ПУСТОЙ заголовок, и гость получал
+        //: немой 401 - «поломка комнаты» на вид. Теперь отказ наш, ранний и назван
+        //: словами, а серверный гейт у действия остаётся на месте (закон №32).
+        var h = _actAuth();
+        if (!h) {
+          say('Это делается из бота: открой комнату его кнопкой. По разовой ссылке '
+              + 'можно слушать и говорить, а записью и эфиром распоряжается тот, кого '
+              + 'бот знает.', true);
+          return false;
+        }
         var r = await fetch(API + '/signal', {
           method: 'POST',
-          headers: { 'X-Init-Data': initData, 'Content-Type': 'application/json' },
+          headers: h,
           body: JSON.stringify(body),
         });
         var j = await r.json();
@@ -11943,7 +12063,14 @@ registerProcessor('rnn-denoise', RnnProc);
           // и человеку незачем гадать. Тот же класс, что уже дважды стоил круга: страница
           // и Worker выкладываются разными командами.
           var why = (j && (j.why || j.error)) || 'без причины';
-          say(why === 'bad_kind'
+          //: ═══ ТРЕТИЙ МИР ПОД ТЕМ ЖЕ КОДОМ: «ЭТО НЕЛЬЗЯ ГОСТЮ» ═══
+          //: Worker знает вид сигнала, но веб-гостю его не даёт. Назвать это «выложен
+          //: старой версией» значило бы отправить человека ждать деплоя, которого не
+          //: будет, - то есть подменить причину (закон №41).
+          say(why === 'web_not_allowed'
+              ? 'Это доступно тем, кто вошёл кнопкой из бота: по разовой ссылке такое '
+                + 'не делается. Открой комнату из бота, и кнопка заработает.'
+              : why === 'bad_kind'
               ? 'Эта кнопка не подключена: Worker выложен старой версией и про неё не '
                 + 'знает. Это у нас - worker_deploy.deploy().'
               : 'Бот не принял просьбу (' + r.status + '): ' + why, true);
@@ -12117,8 +12244,14 @@ registerProcessor('rnn-denoise', RnnProc);
         await new Promise(function (ok) { setTimeout(ok, 1200); });
         var res = null;
         try {
+          //: ═══ ВТОРАЯ КОПИЯ ТРЕБОВАНИЯ, И ОНА СТОЯЛА В ПАРЕ С `ask` ═══
+          //: НАЙДЕНО АУДИТОМ 06.10 по заданию Ren, а не отказом: здесь был свой сырой
+          //: `initData`. Пока требование у `ask` и здесь совпадало, расхождения не
+          //: видно - оно появилось бы у того, кто поменял одну половину: просьба ушла, а
+          //: ответ забрать нечем, и человек читает «бот не ответил» про работу, которая
+          //: шла. Теперь требование считает ОДНА дверь на пару (закон №40).
           var rr = await fetch(API + '/result?id=' + encodeURIComponent(id),
-                               { headers: { 'X-Init-Data': initData } });
+                               { headers: _actAuth() || {} });
           res = await rr.json();
         } catch (e) { continue; }
         if (res && res.state) last = res.state;
